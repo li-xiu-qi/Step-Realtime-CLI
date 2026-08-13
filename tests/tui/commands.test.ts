@@ -83,6 +83,18 @@ describe('SLASH_COMMANDS 注册表', () => {
     expect(busyRoute('skill', 'foo')).toBe('queue');
   });
 
+  it('包含 compact-model 命令：无参查询即时、带参切换排队', () => {
+    const names = SLASH_COMMANDS.map((c) => c.name);
+    expect(names).toContain('compact-model');
+    expect(parseSlash('/compact-model')).toEqual({ name: 'compact-model', args: '' });
+    expect(parseSlash('/compact-model song')).toEqual({ name: 'compact-model', args: 'song' });
+    expect(parseSlash('/compact-model reset')).toEqual({ name: 'compact-model', args: 'reset' });
+    // 无参只读查询 → 即时；带参改压缩绑定（turn 前提）→ 排队
+    expect(busyRoute('compact-model', '')).toBe('instant');
+    expect(busyRoute('compact-model', 'song')).toBe('queue');
+    expect(busyRoute('compact-model', 'reset')).toBe('queue');
+  });
+
   it('包含 plugin 命令：管理子命令不碰对话状态，busy 时均即时', () => {
     const names = SLASH_COMMANDS.map((c) => c.name);
     expect(names).toContain('plugin');

@@ -328,6 +328,9 @@ Cleanup for `max_sessions` / `ttl_days` runs once at process startup, and every 
 | `user_message_max_tokens` | 20000 | 0–200000 | Verbatim budget for the user's own words: the total volume of original user messages preserved separately alongside the summary during compaction. 0 disables the verbatim block, returning to pure summary behavior |
 | `user_message_head_tokens` | 2000 | 0–the previous field | The share of the verbatim budget allotted to the "earliest messages"; the remainder goes to the most recent ones |
 
+At runtime, `/compact-model` switches the compaction model at session scope (overrides the `model` setting, not persisted; `/new` and restarts return to the config):
+`/compact-model <alias|model-id>` switches, `/compact-model reset` clears the override, and no arguments show the current binding source and resolution.
+
 Besides producing a handoff summary, compaction also preserves the original user messages that were compacted away, **verbatim** and as **separate messages** within the budget, placed before the summary.
 This directly addresses the fact that a summary loses the original intent through paraphrase: a summary is the model's second-hand retelling, and once the wording drifts, later turns keep working from the wrong understanding.
 

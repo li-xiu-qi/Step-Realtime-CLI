@@ -139,8 +139,8 @@ describe('matchSlashCommands 斜杠命令匹配', () => {
     expect(matchSlashCommands('/zzz')).toEqual([]);
   });
   it('短查询（≤3 字符）降级到子序列匹配，前缀命中优先于子序列命中', () => {
-    // cp → compact（子序列：c→p）、mcp（子序列：c→p），两条子序列命中按注册序
-    expect(matchSlashCommands('/cp').map((c) => c.name)).toEqual(['compact', 'mcp']);
+    // cp → compact / compact-model / mcp（子序列：c→p），子序列命中按注册序（compact-model 注册在 compact 后）
+    expect(matchSlashCommands('/cp').map((c) => c.name)).toEqual(['compact', 'compact-model', 'mcp']);
     // se → resume（sessions 别名前缀命中，排前）、usage（子序列 s→e，排后）
     // 前缀命中优先于子序列命中，这个顺序是本用例要钉住的语义
     expect(matchSlashCommands('/se').map((c) => c.name)).toEqual(['resume', 'usage']);
@@ -152,7 +152,8 @@ describe('matchSlashCommands 斜杠命令匹配', () => {
   it('≥4 字符不做子串降级，避免误命中', () => {
     // sess → resume（仅 sessions 别名前缀匹配；compact 含 ss 但 4 字符不降级）
     expect(matchSlashCommands('/sess').map((c) => c.name)).toEqual(['resume']);
-    expect(matchSlashCommands('/comp').map((c) => c.name)).toEqual(['compact']);
+    // comp → compact / compact-model（均前缀命中，按注册序）
+    expect(matchSlashCommands('/comp').map((c) => c.name)).toEqual(['compact', 'compact-model']);
   });
 });
 

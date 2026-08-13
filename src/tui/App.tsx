@@ -366,6 +366,9 @@ export function App({
   // 摘要请求打该渠道自己的端点与密钥（跨渠道大小模型协同）。/reload 后按新配置重解。
   // provider 实例按别名缓存，避免每轮组装参数时重建 SDK 客户端。
   const compactionProviderCache = useRef(new Map<string, ChatProvider>());
+  // `/compact-model` 的会话级覆盖：非 undefined 时优先于 config.compaction.model（不落盘，
+  // /new 与重启后回到 config；与 /model 的会话级语义一致）。/reload 重解时保留。
+  const compactionModelOverrideRef = useRef<string | undefined>(undefined);
   const compactionBindingRef = useRef(resolveCompactionBinding(config, compactionProviderCache.current));
   // 当前模型的别名绑定：/model 别名切换成功记别名、裸 id 切换置 null（/provider 切换亦置 null——
   // 别名绑定已断）；/resume 经 applyModelAlias 反查路径同步维护。/reload 据此决定 provider 重建策略。
@@ -2480,6 +2483,55 @@ export function App({
           })();
           break;
         }
+        case 'compact-model': {
+          const arg = args.trim();
+          // 无参查询（只读，busy 时经 busyRoute 即时分发到此处）：展示来源与解析结果两行
+          if (arg === '') {
+            const override = compactionModelOverrideRef.current;
+            const configured = configRef.current.compaction.model;
+            const binding = compactionBindingRef.current;
+            const source =
+              override !== undefined
+                ? t('app.compactModel.sourceOverride', { name: override })
+                : configured !== undefined && configured !== ''
+                  ? t('app.compactModel.sourceConfig', { name: configured })
+                  : t('app.compactModel.sourceNone');
+            const resolved =
+              binding.provider !== undefined
+                ? t('app.compactModel.resolvedAlias', { model: binding.model ?? '' })
+                : binding.model !== undefined
+                  ? t('app.compactModel.resolvedBare', { model: binding.model })
+                  : t('app.compactModel.resolvedMain');
+            pushItem({ kind: 'note', text: `${source}\n${resolved}` });
+            break;
+          }
+          // reset：清除会话级覆盖，按 config 重解（缓存无需清——键是别名，重解同别名复用实例）
+          if (arg === 'reset') {
+            if (compactionModelOverrideRef.current === undefined) {
+              pushItem({ kind: 'note', text: t('app.compactModel.noOverride') });
+              break;
+            }
+            compactionModelOverrideRef.current = undefined;
+            compactionBindingRef.current = resolveCompactionBinding(configRef.current, compactionProviderCache.current);
+            pushItem({ kind: 'note', text: t('app.compactModel.resetDone') });
+            break;
+          }
+          // 切换：覆盖落 ref 后重解 binding，下一次压缩（手动或自动）即按新绑定走。
+          // 会话级不落盘——与 /model 同口径，持久化靠 config.toml + 热重载。
+          compactionModelOverrideRef.current = arg;
+          const binding = resolveCompactionBinding(configRef.current, compactionProviderCache.current, arg);
+          compactionBindingRef.current = binding;
+          if (binding.provider !== undefined) {
+            pushItem({ kind: 'note', text: t('app.compactModel.switchedAlias', { name: arg, model: binding.model ?? arg }) });
+          } else if (binding.model !== undefined) {
+            pushItem({ kind: 'note', text: t('app.compactModel.switchedBare', { model: binding.model }) });
+          } else {
+            // 别名渠道构造失败 → 空绑定 = 跟随主会话模型。不能说「切换成功」。
+            // 覆盖保留（与 config 配了坏别名的行为一致），reset 可清除。
+            pushItem({ kind: 'note', text: t('app.compactModel.fallback', { name: arg }) });
+          }
+          break;
+        }
         case 'history': {
           const arg = args.trim();
           if (arg === '') {
@@ -2718,8 +2770,9 @@ export function App({
           ctx.searchConfig = next.search; // [search] 段热重载
           // 压缩摘要绑定热重载：[compaction] model 或它指向的别名/渠道改动后，下一次压缩即按新绑定走。
           // 缓存清空是必须的：别名名字没变但其 model/base_url/api_key 改了时，旧实例仍打旧端点。
+          // /compact-model 的会话级覆盖在 reload 后保留（覆盖优先于 config 取值）。
           compactionProviderCache.current.clear();
-          compactionBindingRef.current = resolveCompactionBinding(next, compactionProviderCache.current);
+          compactionBindingRef.current = resolveCompactionBinding(next, compactionProviderCache.current, compactionModelOverrideRef.current);
           // provider 重建决策（设计 3.3 四路）：别名仍在→按新 resolved 重建；别名被删/无法解析/重建失败→沿用旧 provider
           const plan = planProviderReload(prev, next, modelRef.current, currentModelAliasRef.current);
           let providerNote = '';
