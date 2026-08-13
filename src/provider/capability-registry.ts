@@ -122,9 +122,10 @@ export type CapabilityKey = (typeof CAPABILITY_KEYS)[number];
 /**
  * 把 config.toml 的 capabilities 字符串数组翻译成 {@link CapabilityOverride} 的能力片段。
  *
- * 语义是**只增不减的并集**：声明某维度即置 true，
- * 未声明的维度不写进片段、继续沿用默认。这样用户漏写一个维度不会丢掉该能力，
- * 只有在静态表里显式登记例外才会降能力。
+ * 语义：正向声明置 true；**`-` 前缀显式取负置 false**（如 `"-image_in"` 声明该模型
+ * 不收图——端点只收纯文本时用，2026-08-13 智谱端点 400 实录）。未提到的维度不写进
+ * 片段、继续沿用表结果或默认。取负是给「用户确知端点行为」的显式通道，不改变
+ * 「未声明默认支持」的全局取向（静默劣化比显式报错难查，那条取向依然成立）。
  *
  * `thinking` 映射到 ModelCapability.reasoning（一个是配置词，一个是内部字段名）。
  * `video_in` / `audio_in` 目前只用于工具门控，degrader 无对应降级路径，
@@ -136,12 +137,16 @@ export function capabilitiesToOverride(
   capabilities: readonly string[] | undefined,
 ): CapabilityOverride | undefined {
   if (capabilities === undefined || capabilities.length === 0) return undefined;
-  const declared = new Set(capabilities.map((c) => c.trim().toLowerCase()));
   const capability: Partial<ModelCapability> = {};
-  if (declared.has('image_in')) capability.image_in = true;
-  if (declared.has('thinking')) capability.reasoning = true;
-  if (declared.has('tool_use')) capability.tool_use = true;
-  if (declared.has('cache_control')) capability.cache_control = true;
+  for (const raw of capabilities) {
+    const c = raw.trim().toLowerCase();
+    const negate = c.startsWith('-');
+    const key = negate ? c.slice(1) : c;
+    if (key === 'image_in') capability.image_in = !negate;
+    else if (key === 'thinking') capability.reasoning = !negate;
+    else if (key === 'tool_use') capability.tool_use = !negate;
+    else if (key === 'cache_control') capability.cache_control = !negate;
+  }
   if (Object.keys(capability).length === 0) return undefined;
   return { channel, model, capability };
 }

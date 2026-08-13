@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ModelCapability } from './capability-registry.js';
 import { isContextOverflowError } from './retry.js';
+import type { ChatProvider } from './types.js';
 
 /**
  * 按能力声明的主动降级 + 错误驱动的重投影链。
@@ -184,6 +185,26 @@ const MEDIA_ERROR_PATTERNS: readonly RegExp[] = [
   // 端点只收 text part（智谱等）：我们发出的非 text part 只有图片，命中即媒体问题
   /content\.type.{0,30}(参数非法|取值范围|invalid|not supported|must be)/i,
 ];
+
+/**
+ * 发送前能力投影（provider 包装器）：image_in=false 时把请求消息里的媒体块
+ * 换成占位文本再发，不等服务端 400。只投影请求参数，不改历史存储——切回多模态
+ * 模型后图片自动恢复。与错误驱动的重投影链互补：声明过的端点零失败请求，
+ * 未声明的端点仍由 400 方言降级链兜底（2026-08-13 设计：能力声明 + 发送前投影）。
+ *
+ * image_in=true（默认）时原样返回 inner，零包装零开销。
+ */
+export function withCapabilityProjection<T extends ChatProvider>(
+  inner: T,
+  capability: ModelCapability,
+): T {
+  if (capability.image_in) return inner;
+  const wrapped = Object.create(Object.getPrototypeOf(inner)) as T;
+  Object.assign(wrapped, inner);
+  wrapped.stream = (params: Parameters<ChatProvider['stream']>[0]) =>
+    inner.stream({ ...params, messages: degradeMessages(params.messages, capability) });
+  return wrapped;
+}
 
 /** 从错误上提取可匹配的文本（message + error.type，覆盖 SDK 包装与裸 Error）。 */
 function errorText(err: unknown): string {

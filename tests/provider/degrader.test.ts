@@ -239,3 +239,45 @@ const REPROJECTION_LEVELS_ALL: ReprojectionLevel[] = [
   'media-stripped',
   'strict',
 ];
+
+describe('withCapabilityProjection（发送前能力投影）', () => {
+  it('image_in=false：请求消息里的图片被换成占位文本，历史原数组不动', async () => {
+    const { withCapabilityProjection } = await import('../../src/provider/degrader.js');
+    const { DEFAULT_CAPABILITY } = await import('../../src/provider/capability-registry.js');
+    let seen: unknown;
+    const fake = {
+      stream(params: { messages: unknown }) {
+        seen = params.messages;
+        return {
+          finalMessage: async () => ({ content: [], stop_reason: 'end_turn' }),
+          [Symbol.asyncIterator]: async function* () {},
+          abort() {},
+        };
+      },
+    };
+    const messages = [
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png', data: 'AAAA' } },
+          { type: 'text' as const, text: '看这个' },
+        ],
+      },
+    ];
+    const wrapped = withCapabilityProjection(fake as never, { ...DEFAULT_CAPABILITY, image_in: false });
+    wrapped.stream({ messages } as never);
+    const projected = (seen as typeof messages)[0]!.content;
+    // 图片块变占位文本，文本块保留
+    expect(projected.every((b) => b.type === 'text')).toBe(true);
+    expect(projected.map((b) => (b as { text: string }).text).join('')).toContain('看这个');
+    // 原历史没被改写（投影不改存储）
+    expect(messages[0]!.content[0]!.type).toBe('image');
+  });
+
+  it('image_in=true：零包装原样返回（同一引用）', async () => {
+    const { withCapabilityProjection } = await import('../../src/provider/degrader.js');
+    const { DEFAULT_CAPABILITY } = await import('../../src/provider/capability-registry.js');
+    const fake = { stream: () => ({}) };
+    expect(withCapabilityProjection(fake as never, DEFAULT_CAPABILITY)).toBe(fake);
+  });
+});

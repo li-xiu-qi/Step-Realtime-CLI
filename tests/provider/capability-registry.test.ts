@@ -102,6 +102,21 @@ describe('capabilitiesToOverride', () => {
   it('只含 video_in / audio_in 时不产生 override（无请求整形语义）', () => {
     expect(capabilitiesToOverride('stepfun', 'm', ['video_in', 'audio_in'])).toBeUndefined();
   });
+
+  it('"-" 前缀显式取负（2026-08-13 设计：端点只收纯文本时声明 -image_in）', () => {
+    const ov = capabilitiesToOverride('openai', 'glm-x-preview-k', ['thinking', '-image_in']);
+    expect(ov?.capability).toEqual({ reasoning: true, image_in: false });
+    // 解析后 image_in 压住默认 true，其余维度不动
+    const cap = resolveCapability('openai', 'glm-x-preview-k', [ov!]);
+    expect(cap.image_in).toBe(false);
+    expect(cap.tool_use).toBe(true);
+    expect(cap.reasoning).toBe(true);
+  });
+
+  it('取负与正向同现时后写胜出', () => {
+    const ov = capabilitiesToOverride('openai', 'm', ['-image_in', 'image_in']);
+    expect(ov?.capability.image_in).toBe(true);
+  });
 });
 
 describe('CAPABILITY_KEYS', () => {

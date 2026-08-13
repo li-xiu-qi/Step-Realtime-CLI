@@ -192,7 +192,7 @@ When several step processes switch models at the same time, the last writer wins
 
 This bias is deliberate. Guess a capability too low and the client silently strips content you actually sent (images replaced by placeholder text, historical thinking deleted) with no error and nothing to see; guess too high and the server returns an explicit error, with automatic reprojection downgrade as a fallback. **Silently losing content is far harder to diagnose than an explicit error**, so the default is to let it through.
 
-The semantics of `capabilities` are **additive only**: listing a value declares support, and dimensions you omit fall back to the defaults above — omitting one never costs you a capability.
+The semantics of `capabilities`: listing a value declares support, and dimensions you omit fall back to the defaults above — omitting one never costs you a capability. A `-` prefix **explicitly negates** (e.g. `capabilities = ["-image_in"]` declares the model does not accept images) for cases where you know the endpoint's behavior: once declared, submitting a message with images is blocked with a notice, and images in history are projected as placeholder text before sending (originals are kept; switching back to a vision-capable model restores them). A lone `-` is treated as an unknown value and fails at startup.
 
 - The value domain is validated: an unknown capability name (for example `image_in` misspelled as `image-in`) fails at startup with the list of valid values, instead of silently doing nothing. A wrong field type (not a non-empty string array) also fails.
 - Case and surrounding whitespace are normalized (`IMAGE_IN` equals `image_in`).

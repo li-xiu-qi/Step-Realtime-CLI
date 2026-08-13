@@ -146,6 +146,22 @@ export function resolveStartupModelAlias(sessionModel: string, config: StepCodeC
   return undefined;
 }
 
+/** 统计历史中的图片块数（顶层 image 块 + tool_result 内嵌图），用于切模型时的含图提示。 */
+export function countHistoryImages(messages: StoredMessage[]): number {
+  let n = 0;
+  for (const sm of messages) {
+    const c = sm.message.content;
+    if (!Array.isArray(c)) continue;
+    for (const b of c) {
+      if (b.type === 'image') n++;
+      else if (b.type === 'tool_result' && Array.isArray(b.content)) {
+        for (const inner of b.content) if (inner.type === 'image') n++;
+      }
+    }
+  }
+  return n;
+}
+
 export interface AppProps {
   provider: ChatProvider;
   /** system prompt 静态前缀（buildSystemPrompt 产出）；skill 清单与 AGENTS.md 由 App 按当前注册表逐轮组合。 */
@@ -1563,6 +1579,12 @@ export function App({
       persist();
       persistPointer();
       pushItem({ kind: 'note', text: t('app.model.aliasSwitched', { name: arg, model: resolved.model }) });
+      // 切到显式声明不收图（-image_in）的模型且历史含图时提醒：图片将以占位文本投影，
+      // 原图保留，切回多模态模型即恢复（2026-08-13 多模态能力声明设计）。
+      if (resolved.capabilities?.includes('-image_in') === true) {
+        const n = countHistoryImages(history.current);
+        if (n > 0) pushItem({ kind: 'note', text: t('app.model.noImageInHint', { count: n }) });
+      }
     },
     [persist, pushItem],
   );
@@ -2777,6 +2799,12 @@ export function App({
       const text = pasteStore.current.expandPasteMarkers(raw).trim();
       const extracted = extractImageContent(text, imageStore.current);
       const imgCount = extracted.imageCount;
+      // 能力拦截：当前模型显式声明不收图（capabilities 含 -image_in）时带图提交直接拦下——
+      // 防新图被投影层静默占位、用户误以为模型看到了图（2026-08-13 多模态能力声明设计）。
+      if (imgCount > 0 && ctx.capabilities?.includes('-image_in') === true) {
+        pushItem({ kind: 'error', text: t('app.image.modelNoImageIn', { count: imgCount }) });
+        return;
+      }
       // 有图片时允许空文本发送；纯空且无图才忽略
       if (extracted.displayText === '' && imgCount === 0) return;
       // 记录输入历史（非空 text，含斜杠命令与 busy 入队消息，在分发前记录；相邻去重）

@@ -998,7 +998,11 @@ export function resolveModels(raw: unknown): Record<string, ModelEntry> | undefi
         );
       }
       const normalized = (capabilities as string[]).map((c) => c.trim().toLowerCase());
-      const unknown = normalized.filter((c) => !(CAPABILITY_KEYS as readonly string[]).includes(c));
+      // "-" 前缀是显式取负（如 "-image_in"），校验时剥前缀再对白名单；孤立的 "-" 视为未知值
+      const unknown = normalized.filter((c) => {
+        const bare = c.startsWith('-') ? c.slice(1) : c;
+        return !(CAPABILITY_KEYS as readonly string[]).includes(bare);
+      });
       if (unknown.length > 0) {
         throw new Error(
           `[models.${alias}] capabilities 含未知能力名：${unknown.join(', ')}（可用值：${CAPABILITY_KEYS.join(' | ')}）。`,
