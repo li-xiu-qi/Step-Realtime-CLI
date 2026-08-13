@@ -179,10 +179,10 @@ capabilities = ["thinking", "image_in"] # 可选，见下方 capabilities 能力
 | `thinking` | 模型带推理过程输出 | 历史思考块随请求回传，不被剥离 |
 | `tool_use` | 模型支持工具调用 | 工具表正常下发 |
 | `cache_control` | 模型接受 prompt cache 断点 | 允许注入该字段（Step 系列实测不兼容，默认不注入） |
-| `video_in` | 模型接受视频输入 | 预留（v1 视频链路未实现） |
+| `video_in` | 模型接受视频输入 | `read_media` 可读取视频（mp4/mov/webm，按原始字节 inline 交付，默认预算 32MB）；请求里的视频块不被投影为占位文本 |
 | `audio_in` | 模型接受音频输入 | 预留 |
 
-**未声明时的默认值**：`image_in` / `thinking` / `tool_use` 默认视为**支持**，`cache_control` 默认不注入。
+**未声明时的默认值**：`image_in` / `thinking` / `tool_use` 默认视为**支持**，`video_in` 默认视为**不支持**（视频块体积大、端点接受面窄，未声明时发送前投影为占位文本），`cache_control` 默认不注入。
 
 这个取向是刻意的：能力猜少了，客户端会静默剥掉你真实发出的内容（图片被换成占位文本、历史思考被删），不报错也看不见；猜多了服务端会明确报错，且有自动降级重投影兜底。**静默丢内容比显式报错难查得多**，所以默认放行。
 

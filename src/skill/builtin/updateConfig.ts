@@ -170,6 +170,7 @@ endpoint 解析优先级：[search.web]/[search.image] → [search] → 主会�
 | capabilities | string[] | 能力标记（如 thinking / image_in），原样透传给多模态门控 |
 | image_max_edge_px | number | 无（read_media 回退全局 1568） | 图片输入长边上限（像素），read_media 降采样阈值；高上限通道（如 GPT 系 2048）按别名放宽，下限钳制 256 |
 | image_budget_bytes | number | 无（read_media 回退全局 262144） | 单图交付字节预算（经济性预算，非 API 硬限制）；需要原图精度的读图场景按别名放宽，下限钳制 16384 |
+| video_budget_bytes | number | 无（read_media 回退全局 33554432） | 单视频交付字节预算（v1 视频 inline base64，膨胀 1.33 倍进请求体）；确认端点吃得下更大文件时按别名放宽，下限钳制 1048576 |
 
 ### [providers.<id>] 渠道表
 

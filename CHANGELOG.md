@@ -5,6 +5,8 @@
 ## [Unreleased]
 
 ### Added
+- **read_media 视频支持（video_in 能力接线）**：别名声明 `video_in` 后 read_media 可读取视频文件（mp4/mov/webm 等），按原始字节 inline base64 交付模型，默认预算 32MB（可按别名 `video_budget_bytes` 放宽，下限 1MB）。OpenAI chat 协议侧视频块构造为 `video_url` data URI（两个 openai 兼容端点实测接受并能正确描述画面）；未声明 video_in 的模型调用时明确报错并提示抽帧替代，历史中的视频块在发送前投影为占位文本（video_in 默认 false，安全默认）。视频块与图片共用 stepref 落盘卸载/还原通道，会话文件不内联大段 base64。anthropic 协议的视频块序列化为同形状扩展块（当前无 video_in 别名走该协议，未实测路径，端点不收时有 400 方言降级链兜底）。
+
 - **`/compact-model` 运行时切换压缩摘要模型**：此前压缩模型只能从 `[compaction] model` 配置（靠热重载生效），排查压缩故障时验证「换个模型做摘要」要反复编辑配置文件。现在 `/compact-model <别名|模型id>` 会话级切换（与 config 同一套别名解析：命中别名走独立渠道，未命中按裸 id 走主会话渠道）、`/compact-model reset` 回到配置、无参查询当前绑定来源与解析结果。会话级不落盘，与 `/model` 同口径；`/reload` 后覆盖保留。
 
 - **模型多模态能力声明与发送前投影**：`[models.<别名>] capabilities` 支持 `-` 前缀显式取负（如 `capabilities = ["-image_in"]` 声明该端点不收图片）。声明不收图的模型带图提交时被直接拦下并提示（防止图片被静默丢弃造成「模型看到了」的错觉）；切到这类模型时若历史含图，提示图片将以占位文本投影；发送前投影层把媒体块替换为占位文本再发（不等服务端 400），原图保留在历史里、切回多模态模型即恢复。未声明的端点行为不变，仍由 400 方言降级链兜底。

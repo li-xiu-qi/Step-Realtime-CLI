@@ -22,6 +22,7 @@ const MEDIA_BLOCK_TYPES = new Set(['image', 'document']);
 /** 媒体块占位文本：如实告知模型此处有媒体被省略。 */
 const IMAGE_OMITTED_TEXT = '[image omitted: model has no image input]';
 const DOCUMENT_OMITTED_TEXT = '[document omitted: model has no document input]';
+const VIDEO_OMITTED_TEXT = '[video omitted: model has no video input]';
 /**
  * 降级重投影换下的旧图占位文本：必须保留「原图曾存在、因 API 限制被移除」的语义。
  * 模型在前面的轮次可能描述过这些图，只写 [image omitted] 会让它以为自己记错了；
@@ -66,12 +67,25 @@ function stripCacheControl(block: Block): Block {
   return rest as Block;
 }
 
-/** 映射一条消息；空的 content 数组原样保留（不在这里丢消息，避免改变轮次结构）。 */
+/**
+ * 映射一条消息；空的 content 数组原样保留（不在这里丢消息，避免改变轮次结构）。
+ * 下钻 tool_result 的数组 content：read_media 回灌的图片/视频块内嵌在内层，
+ * 只看顶层会让投影与降级对它们全部失效（2026-08-13 视频支持时发现的既有缺口：
+ * 内嵌图片此前也不参与投影与 keepRecent 计数）。
+ */
 function mapBlocks(msg: Anthropic.MessageParam, fn: (block: Block) => Block | null): Anthropic.MessageParam {
   if (typeof msg.content === 'string') return msg;
   const out: Block[] = [];
   for (const block of msg.content) {
-    const mapped = fn(block);
+    let mapped = fn(block);
+    if (mapped !== null && mapped.type === 'tool_result' && Array.isArray(mapped.content)) {
+      const inner: unknown[] = [];
+      for (const ib of mapped.content) {
+        const m2 = fn(ib as Block);
+        if (m2 !== null) inner.push(m2);
+      }
+      mapped = { ...mapped, content: inner } as Block;
+    }
     if (mapped !== null) out.push(mapped);
   }
   return { role: msg.role, content: out };
@@ -93,6 +107,11 @@ export function degradeMessages(
     mapBlocks(msg, (block) => {
       let b: Block | null = block;
       if (!capability.image_in && isMediaBlock(b)) b = mediaPlaceholder(b);
+      // video 块独立门控（官方类型无此块，按运行时形状判定）：模型未声明 video_in 时
+      // 发送前换占位文本，与 image 投影同一层生效（2026-08-13 read_media 视频支持引入）。
+      if (!capability.video_in && (b as unknown as { type: string }).type === 'video') {
+        b = { type: 'text', text: VIDEO_OMITTED_TEXT };
+      }
       if (!capability.reasoning && isThinkingBlock(b)) b = null;
       if (b !== null && !capability.cache_control) b = stripCacheControl(b);
       return b;
@@ -121,18 +140,28 @@ export function applyReprojectionLevel(
 
   // media-degraded 且要保留最近 N 张时，先按消息逆序数出要保留的 image 块集合。
   // 同一块可能被多条消息引用（实际上不会，但防御），用 Set 去重。
+  // 下钻 tool_result 内嵌块：read_media 回灌的图片在内层，漏数会把「最近的图」判成旧图剥掉。
   let keep: Set<Block> | undefined;
   if (level === 'media-degraded' && keepRecentImages > 0) {
     keep = new Set<Block>();
+    const collect = (block: Anthropic.ContentBlockParam): boolean => {
+      if (block.type === 'tool_result' && Array.isArray(block.content)) {
+        for (let ii = block.content.length - 1; ii >= 0; ii--) {
+          if (collect(block.content[ii] as Anthropic.ContentBlockParam)) return true;
+        }
+        return false;
+      }
+      if (block.type === 'image') {
+        keep!.add(block);
+        return keep!.size >= keepRecentImages;
+      }
+      return false;
+    };
     outer: for (let mi = messages.length - 1; mi >= 0; mi--) {
       const content = messages[mi]!.content;
       if (typeof content === 'string') continue;
       for (let bi = content.length - 1; bi >= 0; bi--) {
-        const block = content[bi]!;
-        if (block.type === 'image') {
-          keep.add(block);
-          if (keep.size >= keepRecentImages) break outer;
-        }
+        if (collect(content[bi]!)) break outer;
       }
     }
   }

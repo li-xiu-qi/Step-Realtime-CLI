@@ -185,10 +185,10 @@ When several step processes switch models at the same time, the last writer wins
 | `thinking` | The model emits its reasoning process | Historical thinking blocks are sent back with the request instead of being stripped |
 | `tool_use` | The model supports tool calling | The tool table is sent normally |
 | `cache_control` | The model accepts prompt cache breakpoints | Allows injecting that field (measured as incompatible on the Step family, so it is not injected by default) |
-| `video_in` | The model accepts video input | Reserved (the v1 video path is not implemented) |
+| `video_in` | The model accepts video input | `read_media` can read videos (mp4/mov/webm, delivered inline as raw bytes, default budget 32 MB); video blocks in requests are not projected to placeholder text |
 | `audio_in` | The model accepts audio input | Reserved |
 
-**Defaults when undeclared**: `image_in` / `thinking` / `tool_use` are treated as **supported**, and `cache_control` is not injected.
+**Defaults when undeclared**: `image_in` / `thinking` / `tool_use` are treated as **supported**, `video_in` is treated as **unsupported** (video blocks are large and endpoint support is narrow; undeclared models get video blocks projected to placeholder text before sending), and `cache_control` is not injected.
 
 This bias is deliberate. Guess a capability too low and the client silently strips content you actually sent (images replaced by placeholder text, historical thinking deleted) with no error and nothing to see; guess too high and the server returns an explicit error, with automatic reprojection downgrade as a fallback. **Silently losing content is far harder to diagnose than an explicit error**, so the default is to let it through.
 

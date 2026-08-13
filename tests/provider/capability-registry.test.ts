@@ -99,8 +99,14 @@ describe('capabilitiesToOverride', () => {
     expect(ov?.capability).toEqual({ image_in: true });
   });
 
-  it('只含 video_in / audio_in 时不产生 override（无请求整形语义）', () => {
-    expect(capabilitiesToOverride('stepfun', 'm', ['video_in', 'audio_in'])).toBeUndefined();
+  it('video_in 映射到请求整形（发送前投影视频块）；audio_in 仍不产生 override', () => {
+    const ov = capabilitiesToOverride('stepfun', 'm', ['video_in', 'audio_in']);
+    expect(ov?.capability).toEqual({ video_in: true });
+    expect(capabilitiesToOverride('stepfun', 'm', ['audio_in'])).toBeUndefined();
+  });
+
+  it('video_in 默认 false（未声明时投影视频块为占位文本）', () => {
+    expect(resolveCapability('openai', 'some-unknown-model').video_in).toBe(false);
   });
 
   it('"-" 前缀显式取负（2026-08-13 设计：端点只收纯文本时声明 -image_in）', () => {

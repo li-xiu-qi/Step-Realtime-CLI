@@ -192,6 +192,12 @@ export interface ModelEntry {
    */
   imageBudgetBytes?: number;
   /**
+   * 按别名声明单视频交付字节预算（config.toml [models.*] video_budget_bytes）。
+   * 消费方：read_media 视频预算。缺省走全局保守值 32MB（v1 视频只能 inline base64，
+   * 膨胀 1.33 倍进请求体）；确认端点吃得下更大文件时可按别名放宽。
+   */
+  videoBudgetBytes?: number;
+  /**
    * 按别名覆盖媒体降级保留张数（config.toml [models.*] media_keep_recent）。
    * 缺省继承顶层 media_keep_recent，再缺省 10。通道限制差异大（step-3.7 实测
    * 60 张、Gemini 10 张、GLM 5 张），宽松通道可多留、严格通道少留。
@@ -341,6 +347,8 @@ export interface StepCodeConfig {
   imageMaxEdgePx?: number;
   /** 当前模型的单图交付字节预算。带入语义同 {@link imageMaxEdgePx}；缺省回退 256KB。 */
   imageBudgetBytes?: number;
+  /** 当前模型的单视频交付字节预算。带入语义同 {@link imageMaxEdgePx}；缺省回退 32MB。 */
+  videoBudgetBytes?: number;
   /**
    * 用户原始选择的模型别名（展开前）。当 config.model 是别名（如 'step37-plan'）时，
    * 此字段保存该别名；config.model 是裸模型 id 时为 undefined。
@@ -981,6 +989,8 @@ export function resolveModels(raw: unknown): Record<string, ModelEntry> | undefi
     if (imageMaxEdgePx !== undefined) entry.imageMaxEdgePx = Math.max(256, Math.floor(imageMaxEdgePx));
     const imageBudgetBytes = asNumber(t['image_budget_bytes']);
     if (imageBudgetBytes !== undefined) entry.imageBudgetBytes = Math.max(16 * 1024, Math.floor(imageBudgetBytes));
+    const videoBudgetBytes = asNumber(t['video_budget_bytes']);
+    if (videoBudgetBytes !== undefined) entry.videoBudgetBytes = Math.max(1024 * 1024, Math.floor(videoBudgetBytes));
     const displayName = asString(t['display_name']);
     if (displayName !== undefined) entry.displayName = displayName;
     // capabilities 白名单校验：未知值直接报错，不静默失效。
@@ -1154,6 +1164,8 @@ export function resolveModelEntry(config: StepCodeConfig, name: string): StepCod
     // 图片输入上限同 capabilities 语义：只在命中别名且声明时带入，裸模型/未声明为 undefined
     imageMaxEdgePx: entry.imageMaxEdgePx,
     imageBudgetBytes: entry.imageBudgetBytes,
+    // 视频交付预算同图片上限语义：只在命中别名且声明时带入
+    videoBudgetBytes: entry.videoBudgetBytes,
     // mediaKeepRecent 按别名覆盖，未声明继承顶层（再缺省由工厂/use 点补 10）
     mediaKeepRecentImages: entry.mediaKeepRecent ?? config.mediaKeepRecentImages,
   };

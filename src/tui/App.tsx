@@ -1553,6 +1553,7 @@ export function App({
         ctx.capabilities = undefined; // 裸模型无别名 capabilities 绑定
         ctx.imageMaxEdgePx = undefined;
         ctx.imageBudgetBytes = undefined;
+        ctx.videoBudgetBytes = undefined;
         setModel(arg);
         modelRef.current = arg;
         setModelLabel(arg);
@@ -1574,6 +1575,7 @@ export function App({
       ctx.capabilities = resolved.capabilities; // read_media 等工具的能力门控跟随新模型
       ctx.imageMaxEdgePx = resolved.imageMaxEdgePx;
       ctx.imageBudgetBytes = resolved.imageBudgetBytes;
+      ctx.videoBudgetBytes = resolved.videoBudgetBytes;
       setModel(resolved.model);
       modelRef.current = resolved.model;
       setModelLabel(configRef.current.models?.[arg]?.displayName ?? resolved.model);
@@ -1620,6 +1622,7 @@ export function App({
       ctx.capabilities = undefined; // 预设切换无别名 capabilities 绑定
       ctx.imageMaxEdgePx = undefined;
       ctx.imageBudgetBytes = undefined;
+      ctx.videoBudgetBytes = undefined;
       providerNameRef.current = name;
       setModel(nextModel);
       const modelNote =
@@ -1649,6 +1652,7 @@ export function App({
     const limits = resolveImageLimitsOnReload(result.config, currentModelAliasRef.current);
     ctx.imageMaxEdgePx = limits.imageMaxEdgePx;
     ctx.imageBudgetBytes = limits.imageBudgetBytes;
+    ctx.videoBudgetBytes = limits.videoBudgetBytes;
     ctx.searchConfig = result.config.search; // [search] 段热重载
     return true;
   }, [reloadConfig]);
@@ -2767,6 +2771,7 @@ export function App({
           const nextLimits = resolveImageLimitsOnReload(next, currentModelAliasRef.current);
           ctx.imageMaxEdgePx = nextLimits.imageMaxEdgePx;
           ctx.imageBudgetBytes = nextLimits.imageBudgetBytes;
+          ctx.videoBudgetBytes = nextLimits.videoBudgetBytes;
           ctx.searchConfig = next.search; // [search] 段热重载
           // 压缩摘要绑定热重载：[compaction] model 或它指向的别名/渠道改动后，下一次压缩即按新绑定走。
           // 缓存清空是必须的：别名名字没变但其 model/base_url/api_key 改了时，旧实例仍打旧端点。
@@ -2979,6 +2984,7 @@ export function App({
         capabilities: ctx.capabilities,
         imageMaxEdgePx: ctx.imageMaxEdgePx,
         imageBudgetBytes: ctx.imageBudgetBytes,
+        videoBudgetBytes: ctx.videoBudgetBytes,
         config: configRef.current, // 让子 agent 可解析角色 model 别名、跨渠道构造 provider
         hooks,
         maxDepth: configRef.current.subagent.maxDepth,
