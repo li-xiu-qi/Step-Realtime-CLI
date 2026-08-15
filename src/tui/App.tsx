@@ -1164,6 +1164,12 @@ export function App({
       const action = decideCtrlC({ busy: busyRef.current, exitPrimed: exitPrimedRef.current, inputEmpty: input === '' });
       if (action === 'abort-turn') {
         cancelExitPrimed();
+        // 中断 goal 回合即暂停 goal：中断的意图是「停」，不暂停的话收尾点会把
+        // 待派发的续接再发出去（停不掉的反向 bug）；/goal resume 恢复
+        if (goal.current.get()?.status === 'active') {
+          goal.current.update('paused');
+          pendingContinuationRef.current = null;
+        }
         abortRef.current?.abort();
         return;
       }
@@ -1210,6 +1216,11 @@ export function App({
       // 弹层优先：输入框是斜杠命令（菜单可见）时 Esc 归 PromptInput 关菜单，不中断回合；
       // 菜单关掉后下一次 Esc 才中断（与空闲态「弹窗优先于中断」的 E3 语义一致）
       if (input.startsWith('/')) return;
+      // 中断 goal 回合即暂停 goal（同上：Ctrl+C 分支同一语义）
+      if (goal.current.get()?.status === 'active') {
+        goal.current.update('paused');
+        pendingContinuationRef.current = null;
+      }
       abortRef.current?.abort();
       return;
     }
@@ -1432,8 +1443,9 @@ export function App({
           }
           break;
         case 'continuation':
-          // goal 等自主续接：本 run 结束，续接描述暂存，finally 里判定后由 App 发起下一轮（不进 items）
-          pendingContinuationRef.current = { inject: ev.inject };
+          // goal 等自主续接：不进 items；ref 必须在 submit 消费循环里同步写入（见 submit），
+          // 不得在 setItems updater 里写——updater 由 React 异步执行，finally 的 turnEndRef
+          // 同步读取会读到 null，续接被静默丢弃（2026-08-15 根因 A）
           break;
         case 'turn_done':
           break;
@@ -1502,8 +1514,9 @@ export function App({
         const r = await askApproval({ name: req.name, input: req.input });
         return r.allow ? { decision: 'allow' } : { decision: 'deny', reason: denyReason(r.feedback) };
       },
-      // goal 续跑（轮级驱动薄壳）：decideGoalTurn 裁决，副作用（计轮/标 blocked）在此层落定；
-      // 返回续接描述后由 runAgent 产 continuation 事件，App 在回合收尾时发起下一轮 run
+      // goal 续跑（轮级驱动薄壳）：decideGoalTurn 裁决，blocked 落定在此层；
+      // 计轮在实际派发点（turnEndRef 的 submit-continuation 分支）——闸门只裁决不记账，
+      // 否则「计了轮但注入没发出去」时 turnsUsed 失真（2026-08-15 根因修复）
       shouldContinueAfterStop: () => {
         const d = decideGoalTurn(goal.current);
         if (d.kind === 'stop') return null;
@@ -1512,7 +1525,6 @@ export function App({
           pushItem({ kind: 'note', text: t(d.budget === 'turns' ? 'app.goal.overBudgetTurns' : 'app.goal.overBudgetTokens') });
           return null;
         }
-        goal.current.incrementTurn();
         return { inject: d.inject };
       },
       };
@@ -3144,6 +3156,13 @@ export function App({
           // 循环内非消息事件（压缩应用、通知送达）落盘到事件日志
           onWireEvent: appendWireEvent,
         })) {
+          // goal 续接描述同步落 ref：必须在 finally 的 turnEndRef 读取之前落定，
+          // 经 setItems updater 会被 React 推迟执行，读到 null 即静默丢弃（2026-08-15 根因 A）。
+          // 不进渲染流：continuation 不产生展示条目。
+          if (ev.type === 'continuation') {
+            pendingContinuationRef.current = { inject: ev.inject };
+            continue;
+          }
           // 流式节流：高频 text/thinking_delta/usage 经 StreamBuffer 合帧（50ms 一帧），
           // 结构事件立即 flush+消费。避免一个 delta 一次 Ink 全帧重绘。
           streamBuffer.ingest(ev);
@@ -3233,6 +3252,8 @@ export function App({
       // goal 轮级驱动：goal 仍 active 时 steer 留言拼进注入文本；assemble 返回 null（goal 已结束）退化为原始 inject
       let text: string | null = null;
       if (goalActive) {
+        // 计轮在实际派发点：注入真的发出去了才算一轮（闸门只裁决不记账）
+        goal.current.incrementTurn();
         const steers = steerRef.current.splice(0);
         text = assembleGoalInject(goal.current, cont.inject, steers);
       }
