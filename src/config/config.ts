@@ -321,6 +321,8 @@ export interface StepCodeConfig {
   extraSkillDirs?: string[];
   /** 按名排除的 skill 清单（config.toml disabled_skills）。合并完成后统一过滤，任何来源的同名 skill 都不加载；用于屏蔽不归你管的目录（团队共享 .agents/skills 等）里的个别 skill。 */
   disabledSkills?: string[];
+  /** skill 清单注入 system prompt 的字符预算（config.toml skill_listing_budget）。缺省 8000；超预算先压缩描述再逐条截断。调高可让更多 skill 的名称和描述常驻 L1。 */
+  skillListingBudget?: number;
   /**
    * 媒体降级时保留的最近图片张数（config.toml media_keep_recent）。缺省 10。
    * 全通道生效：stepfun 走 StepfunAdapter.send 的重投影，其余通道走
@@ -553,6 +555,7 @@ interface TomlConfigShape {
   media_keep_recent?: unknown;
   extra_skill_dirs?: unknown;
   disabled_skills?: unknown;
+  skill_listing_budget?: unknown;
   models?: unknown;
   providers?: unknown;
   hooks?: unknown;
@@ -1272,6 +1275,8 @@ export function loadConfig(
   if (extraSkillDirs !== undefined) cfg.extraSkillDirs = extraSkillDirs;
   const disabledSkills = resolveStringArray(toml.disabled_skills);
   if (disabledSkills !== undefined) cfg.disabledSkills = disabledSkills;
+  const skillListingBudget = asNumber(toml.skill_listing_budget);
+  if (skillListingBudget !== undefined && skillListingBudget > 0) cfg.skillListingBudget = Math.floor(skillListingBudget);
   // 权限模式默认值：未配置时键不进结果对象；非法值抛配置错误（安全相关，不静默吞）
   const permissionMode = resolvePermissionMode(toml.permission_mode);
   if (permissionMode !== undefined) cfg.permissionMode = permissionMode;

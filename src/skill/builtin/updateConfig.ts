@@ -48,6 +48,7 @@ const UPDATE_CONFIG_BODY = `# update-config：step-code 自身配置的查询与
 | media_keep_recent | number | 10 | 媒体降级（413/400 图片超限触发）时保留的最近图片张数，更旧的图换占位文本；0 = 全部换占位。全通道生效（stepfun 走 adapter.send，其余走 withMediaDegradation wrapper）；[models.*] 下可按别名覆盖 |
 | extra_skill_dirs | string[] | 无 | 追加的 skill 扫描目录，同名 skill 追加目录胜出 |
 | disabled_skills | string[] | 无 | 按名排除的 skill 清单，任何来源的同名 skill 都不加载 |
+| skill_listing_budget | number | 8000 | system prompt 中可用技能清单的字符预算；超预算先压缩描述，再截断尾部技能。技能较多时可调大（如 20000），让更多技能名称和描述常驻；也可始终用 skill_search 工具搜索被截断的技能 |
 | continuation | table | 无 | 输出截断自动续写配置（[continuation] 段） |
 | tools | table | 无 | 网页结果缓存配置（[tools.web] 段），未配置时使用内置默认值 |
 

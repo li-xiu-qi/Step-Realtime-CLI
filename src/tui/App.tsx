@@ -3115,7 +3115,7 @@ export function App({
       });
       // system 按当前 skill 注册表逐轮组合：systemPrefix + skill 清单 + 自定义子 agent 角色 + AGENTS.md 尾部（reload 后下一轮即生效）
       const systemNow =
-        systemPrefix + skillListing(skillsRef.current) + subagentListing([...subagentRegistry.values()]) + (agentsMd !== '' ? `\n\n${agentsMd}` : '');
+        systemPrefix + skillListing(skillsRef.current, config.skillListingBudget) + subagentListing([...subagentRegistry.values()]) + (agentsMd !== '' ? `\n\n${agentsMd}` : '');
       // memory 观察池段：仅开启时注入，拼在 AGENTS.md 之后（system 尾部：低频变动内容，保住缓存前缀）。
       // 每轮现扫目录——条目数小（几十内），开销可忽略；换来的是 agent 自己写完文件后下轮即被索引到。
       const memoryPart = configRef.current.memory?.enabled === true ? `\n\n${memorySection(scanMemory(ctx.cwd))}` : '';

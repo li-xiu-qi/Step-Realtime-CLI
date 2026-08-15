@@ -326,7 +326,7 @@ export function createSubagentRunner(deps: SubagentRunnerDeps): RunSubagentFn {
       // system 拼上 skill 清单：子 agent 也能按需激活技能（与主 agent 一致的懒加载呈现）
       // cwd 覆盖（team worker 落进自己工作间）：system 提示与 ctx 同步用覆盖值
       const cwd = req.cwd ?? deps.cwd;
-      const skillPart = deps.skills !== undefined ? skillListing(deps.skills) : '';
+      const skillPart = deps.skills !== undefined ? skillListing(deps.skills, deps.config?.skillListingBudget) : '';
       // 记忆索引对子 agent 只读注入（开启时）：它做调研需要偏好上下文，但无写入权
       const memoryPart =
         deps.config?.memory?.enabled === true ? `\n\n${memorySection(scanMemory(cwd), 'readonly')}` : '';
