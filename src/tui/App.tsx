@@ -8,7 +8,7 @@ import { runReflect, REFLECT_EMPTY_HISTORY, REFLECT_NO_FINDINGS } from '../agent
 import type { LoopHooks } from '../agent/hooks.js';
 import { composeLoopHooks, type HookEngine } from '../agent/hooks/engine.js';
 import { stored, type StoredMessage } from '../agent/message.js';
-import { historyToDisplayItems } from './historyReplay.js';
+import { assembleResumeItems, historyToDisplayItems } from './historyReplay.js';
 import { decide, planModeDenyReason, type PermissionMode } from '../agent/permission/mode.js';
 import { BackgroundManager, type BackgroundTask } from '../agent/background/manager.js';
 import { buildSettleMessage, decideNotifyRoute, type NotifiableTask } from '../agent/background/notify.js';
@@ -1783,9 +1783,12 @@ export function App({
           }
         })();
       }
+      // 本函数末尾 setItems 整体替换 items，中途 pushItem 的条目会被覆盖丢弃，
+      // 故恢复相关的提示 note 全部先收进这个局部数组，最后经 assembleResumeItems 拼进尾部。
+      const resumeTailNotes: DisplayItem[] = [];
       // 同启动对账：补投本体 silent 注入，可见性靠 note（这批任务的 settleHandler 属于上个会话，本会话未触发）
       for (const task of redeliver) {
-        pushItem({
+        resumeTailNotes.push({
           kind: 'note',
           text: t('background.redelivered', {
             id: task.id,
@@ -1804,7 +1807,7 @@ export function App({
       setGoalView(resumedGoal !== null ? { ...resumedGoal } : null);
       // 若恢复后 goal 处于 paused，给用户显式提示，避免静默降级。
       if (resumedGoal !== null && resumedGoal.status === 'paused') {
-        pushItem({
+        resumeTailNotes.push({
           kind: 'note',
           text: t('app.goal.resumedPaused', { objective: resumedGoal.objective }),
         });
@@ -1847,22 +1850,16 @@ export function App({
             count: history.current.length,
           }),
         };
-        const nextItems: DisplayItem[] = [];
-        if (replay.foldedTurns > 0) {
-          nextItems.push({
-            kind: 'note',
-            text: t('app.replay.folded', { folded: replay.foldedTurns, total: replay.totalTurns }),
-          });
-        }
-        nextItems.push(...replay.items, switchedNote);
-        setItems(nextItems);
+        // 提示 note 与回放一次性拼装（assembleResumeItems）：整体替换 setItems 前不收集中途 note，
+        // 会导致 goal 暂停 / 后台补投提示被覆盖丢失。
+        setItems(assembleResumeItems(replay, switchedNote, resumeTailNotes));
       }
       setSessionEpoch((e) => e + 1);
       // 空闲时立即经统一收尾入口派发补投通知（busy 时留在队列，回合收尾自动排空）
       if (redeliver.length > 0 && !busyRef.current) turnEndRef.current();
       return true;
     },
-    [appendWireEvent, applyModelAlias, changeMode, ctx.cwd, persist, pushItem, queueNotification, setPlanModeBoth, setThinkOverrideBoth, store],
+    [appendWireEvent, applyModelAlias, changeMode, ctx.cwd, persist, queueNotification, setPlanModeBoth, setThinkOverrideBoth, store],
   );
 
   /**
