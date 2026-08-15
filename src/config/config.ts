@@ -256,6 +256,8 @@ export interface MemoryConfig {
 export interface TuiConfig {
   /** 工具错误输出折叠态预览行数（clamp [1, 20]）。默认 4。 */
   errorPreviewLines?: number;
+  /** 是否把会话标题写进终端 tab 标题（OSC 0）。默认 true；不支持的终端自动跳过。 */
+  terminalTitle?: boolean;
 }
 
 /**
@@ -900,17 +902,24 @@ export function resolveMemoryConfig(raw: unknown): MemoryConfig {
 /**
  * 从 [tui] 段解析 TUI 渲染配置。纯函数，便于单测。
  *
- * error_preview_lines 缺省 4，clamp [1, 20]。
+ * error_preview_lines 缺省 4，clamp [1, 20]；terminal_title 缺省 true（不进结果对象）。
  * 未配置或类型非法时键不进结果对象（下游 toEqual 精确断言依赖此形态）。
+ *
+ * 两个字段独立解析：只配了其中一个时另一个保持缺省，段内无任何已知字段才返回 undefined。
+ * 注意别改回「首个字段不存在就整段返回 undefined」的写法：那会让只配了
+ * terminal_title 的 [tui] 段整体失效（2026-08-15 加 terminal_title 时修正）。
  */
 export function resolveTuiConfig(raw: unknown): TuiConfig | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
   const t = raw as Record<string, unknown>;
-  if (!('error_preview_lines' in t)) return undefined;
-  const n = asNumber(t['error_preview_lines']);
-  if (n === undefined) return undefined;
-  const errorPreviewLines = clampInt(t['error_preview_lines'], 1, 20, 4);
-  return { errorPreviewLines };
+  const out: TuiConfig = {};
+  if ('error_preview_lines' in t && asNumber(t['error_preview_lines']) !== undefined) {
+    out.errorPreviewLines = clampInt(t['error_preview_lines'], 1, 20, 4);
+  }
+  if ('terminal_title' in t && typeof t['terminal_title'] === 'boolean') {
+    out.terminalTitle = t['terminal_title'];
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 export function resolveThinkingConfig(raw: unknown, maxTokens: number): ThinkingConfig {

@@ -1,5 +1,5 @@
 import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
-import { sep } from 'node:path';
+import { basename, sep } from 'node:path';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { runAgent, type AgentEvent } from '../agent/loop.js';
 import type { AgentsMdTruncation } from '../agent/agentsMd.js';
@@ -108,6 +108,7 @@ import { TodoPanel, allTodosDone } from './TodoPanel.js';
 import { WorkingStatus } from './WorkingStatus.js';
 import { applyDynamicPhaseEvent, parseDynamicWorkflowInput } from './DynamicWorkflowPanel.js';
 import { WelcomeBox } from './WelcomeBox.js';
+import { TerminalTitleWriter } from './terminalTitle.js';
 import { deriveTitle } from '../session/store.js';
 import { canOverwriteTitle, generateSessionTitle } from '../session/title.js';
 import type { SessionData, SessionMeta, SessionStore } from '../session/store.js';
@@ -362,6 +363,16 @@ export function App({
   // 逐轮现取派读取点（submit/runAgent 参数组装、/model /think /provider 各 case、选择器候选、
   // settle 回调的 background 开关）全部经 configRef.current 取，下一轮请求即按新配置生效。
   const configRef = useRef(config);
+  // 终端 tab 标题写入器（OSC 0）：能力探测只在挂载时做一次，不支持的终端后续调用是空操作。
+  // 标题内容口径与会话列表一致（name ?? title），退出时由 unmount cleanup 清空。
+  const termTitle = useRef(
+    new TerminalTitleWriter(
+      process.env,
+      process.stdout.isTTY,
+      configRef.current.tui?.terminalTitle ?? true,
+      (s) => process.stdout.write(s),
+    ),
+  );
   // 压缩摘要绑定（`[compaction] model`）：命中 [models.<别名>] 时按别名渠道建独立 provider，
   // 摘要请求打该渠道自己的端点与密钥（跨渠道大小模型协同）。/reload 后按新配置重解。
   // provider 实例按别名缓存，避免每轮组装参数时重建 SDK 客户端。
@@ -395,6 +406,23 @@ export function App({
       // 持久化失败不应打断会话
     }
   }, [store]);
+
+  /**
+   * 同步终端 tab 标题：口径与会话列表一致（name 优先，其次 title），
+   * 两者都没有时用 cwd 文件夹名（新会话的初始标题，AI 标题生成后再覆盖）。
+   * 每个切换会话/生成标题/rename 的挂点都调一次；不支持的终端在 writer 内部空操作。
+   */
+  const syncTerminalTitle = useCallback(() => {
+    const s = sessionRef.current;
+    const display = (s.name && s.name.trim()) || (s.title && s.title.trim()) || basename(s.cwd);
+    termTitle.current.set(display);
+  }, []);
+
+  // 挂载时设一次初始 tab 标题；unmount（退出）时清空，让终端回落自身默认。
+  useEffect(() => {
+    syncTerminalTitle();
+    return () => termTitle.current.reset();
+  }, [syncTerminalTitle]);
 
   // 退出（/exit、Ctrl+C 等触发 unmount）时上抛当前会话信息，供 main 打印 resume 提示。
   // sessionRef 在 /new、/fork、/resume 时已切换为当前会话，cleanup 读到的是终态值。
@@ -1855,11 +1883,12 @@ export function App({
         setItems(assembleResumeItems(replay, switchedNote, resumeTailNotes));
       }
       setSessionEpoch((e) => e + 1);
+      syncTerminalTitle();
       // 空闲时立即经统一收尾入口派发补投通知（busy 时留在队列，回合收尾自动排空）
       if (redeliver.length > 0 && !busyRef.current) turnEndRef.current();
       return true;
     },
-    [appendWireEvent, applyModelAlias, changeMode, ctx.cwd, persist, queueNotification, setPlanModeBoth, setThinkOverrideBoth, store],
+    [appendWireEvent, applyModelAlias, changeMode, ctx.cwd, persist, queueNotification, setPlanModeBoth, setThinkOverrideBoth, store, syncTerminalTitle],
   );
 
   /**
@@ -2386,6 +2415,7 @@ export function App({
             }),
           });
           persist();
+          syncTerminalTitle();
           break;
         }
         case 'new': {
@@ -2425,6 +2455,7 @@ export function App({
           refreshContextUsage();
           setItems([{ kind: 'note', text: t('app.new.started', { id: sessionRef.current.id }) }]);
           setSessionEpoch((e) => e + 1);
+          syncTerminalTitle();
           break;
         }
         case 'compact': {
@@ -3193,6 +3224,12 @@ export function App({
               if (latest === null) return;
               if (!canOverwriteTitle(latest, deriveTitle(latest.messages))) return;
               store.updateTitle(sessForTitle.cwd, sessForTitle.id, generated);
+              // 标题落盘后同步到终端 tab：此时 sessionRef 仍是本会话（生成是 fire-and-forget，
+              // 用户可能在等待期间 /new 或 /resume 切走），故只在会话未变时更新。
+              if (sessionRef.current.id === sessForTitle.id) {
+                sessionRef.current.title = generated;
+                syncTerminalTitle();
+              }
             })();
           }
         }
@@ -3200,7 +3237,7 @@ export function App({
         turnEndRef.current();
       }
     },
-    [agentsMd, appendWireEvent, applyEvent, askUserQuestion, buildHooks, ctx, handleSlash, hookEngineRef, maxContextSize, model, persist, pluginCommandNames, pushItem, reloadSkills, skillConflictNote, skillsRef, streamBuffer, subagentRegistry, systemPrefix, thinkOverride],
+    [agentsMd, appendWireEvent, applyEvent, askUserQuestion, buildHooks, ctx, handleSlash, hookEngineRef, maxContextSize, model, persist, pluginCommandNames, pushItem, reloadSkills, skillConflictNote, skillsRef, streamBuffer, subagentRegistry, syncTerminalTitle, systemPrefix, thinkOverride],
   );
 
   // 回合收尾统一入口：submit finally 与 /compact finally 共用。
@@ -3782,6 +3819,8 @@ export function App({
                       if (trimmed === '') delete sessionRef.current.name;
                       else sessionRef.current.name = trimmed;
                       persist();
+                      // 当前会话改名：tab 标题跟着变（清名则回退 title）
+                      syncTerminalTitle();
                     }
                     setSessionPickerItems((prev) =>
                       prev.map((m) => (m.id === id ? { ...m, name: trimmed === '' ? undefined : trimmed } : m)),

@@ -411,6 +411,15 @@ enabled = true   # 默认 false：不注入记忆段、不建目录；已有文�
 
 非布尔值写在 bool 字段上、非数字写在 `bash_task_timeout_s` 上时，该字段视为未配置、落默认值。
 
+### `[tui]` 终端界面
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `error_preview_lines` | int | 4 | 工具错误输出折叠态预览行数，clamp 到 1–20 |
+| `terminal_title` | bool | true | 把会话标题写进终端 tab 标题（OSC 0）；`false` 为不写 |
+
+`terminal_title` 开启时，会话的 tab 标题在新会话时为当前目录名，第一轮回答后自动换成 AI 生成的会话标题，`/resume` 切换会话、`/rename` 改名时同步更新，退出时清空。不支持的终端（非 TTY 重定向、`TERM=dumb`、CI 环境、tmux 未开启 passthrough）会自动跳过，不会污染输出；也可用环境变量 `STEP_CODE_NO_TERMINAL_TITLE=1` 强制关闭。Windows Terminal 的 profile 若设了 `suppressApplicationTitle: true`，tab 标题被终端侧锁定，程序无法修改。
+
 ### `[search]` 联网搜索
 
 联网搜索（`web_search` 内容搜索、`web_image_search` 文搜图）是阶跃平台专属能力，与主会话用哪家模型、哪个渠道在业务上无关。默认它复用主会话渠道的 `base_url` + `api_key`——主会话走阶跃渠道时开箱即用，但主会话切到非阶跃渠道（其他厂商模型、自建网关）时，搜索请求会打到错误地址而失败。
@@ -497,6 +506,7 @@ timeout = 30                                 # 秒，可选，默认 30，硬顶
 | 变量 | 说明 |
 |------|------|
 | `STEP_CODE_API_KEY` | API key，隐式渠道只认这个变量 |
+| `STEP_CODE_NO_TERMINAL_TITLE` | 设为 `1` 时不写终端 tab 标题（同 `[tui] terminal_title = false`，不改 config 也能立刻关掉） |
 | `ANTHROPIC_API_KEY` | 渠道/provider 类型为 `anthropic` 时的惯例 key 变量 |
 | `OPENAI_API_KEY` | 渠道/provider 类型为 `openai` / `openai_responses` 时的惯例 key 变量 |
 | `STEP_CODE_PROVIDER` | 服务商，优先级高于 config.toml、低于 `--provider` |

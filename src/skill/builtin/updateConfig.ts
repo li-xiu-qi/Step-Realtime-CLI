@@ -154,6 +154,7 @@ endpoint 解析优先级：[search.web]/[search.image] → [search] → 主会�
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | error_preview_lines | number | 4 | 工具错误输出折叠态预览行数，clamp [1, 20] |
+| terminal_title | bool | true | 把会话标题写进终端 tab 标题（OSC 0），新会话显示目录名、第一轮后换成 AI 标题；false 关闭。不支持的终端自动跳过 |
 
 ### [models.<别名>] 模型别名表（渠道与模型分离）
 
