@@ -8,6 +8,7 @@ import { LogBuffer, injectPrimitives, type BudgetFn, type PhaseFn, type SpawnAge
 import { DEFAULT_WALL_CLOCK_MS, DETERMINISM_PRELUDE, DynamicWorkflowSandbox, SandboxInterrupt } from './sandbox.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { backupBeforeWrite } from '../../tools/checkpoint.js';
 
 /**
  * 动态工作流 runner：把模型现写的 JS 编排脚本包成 async 函数体，在零能力沙箱里执行。
@@ -284,8 +285,12 @@ export async function runDynamicWorkflow(opts: RunDynamicWorkflowOptions): Promi
   /** writeFile 原语：宿主侧直接写文件，路径不受子 agent cwd 影响（解决路径嵌套 bug）。 */
   const writeFile: WriteFileFn = (filePath, content) => {
     const abs = isAbsolute(filePath) ? resolve(filePath) : resolve(opts.cwd, filePath);
+    // checkpoint：覆盖写前备份原内容，供 /restore 回滚（与 write_file 工具同口径）
+    backupBeforeWrite(opts.cwd, abs, 'dynamic_workflow:writeFile');
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content, 'utf8');
+    // 审计日志：writeFile 绕过了 write_file 工具的权限门，必须留痕
+    logs.append(`[writeFile] ${abs}（${Buffer.byteLength(content, 'utf8')} 字节）`);
   };
 
   const sandbox = await DynamicWorkflowSandbox.create({
