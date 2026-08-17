@@ -801,3 +801,53 @@ describe('dynamic_workflow 工具', () => {
     expect(r.content).toContain('不支持后台任务');
   });
 });
+
+describe('writeFile 原语', () => {
+  it('宿主侧直接写文件，路径不受 cwd 影响', { timeout: T }, async () => {
+    const { join } = await import('node:path');
+    const { readFileSync, unlinkSync, rmdirSync } = await import('node:fs');
+    const target = join(cwd, 'writefile-test', 'output.md');
+    try {
+      const r = await runDynamicWorkflow({
+        script: `writeFile(${JSON.stringify(target)}, '# Hello\\nWorld'); return 'ok';`,
+        runSubagent: fakeRunner(),
+        ...base,
+        cwd,
+      });
+      expect(r.report).toBe('ok');
+      expect(readFileSync(target, 'utf-8')).toBe('# Hello\nWorld');
+    } finally {
+      try { unlinkSync(target); rmdirSync(join(cwd, 'writefile-test')); } catch { /* cleanup */ }
+    }
+  });
+
+  it('writeFile 自动创建父目录', { timeout: T }, async () => {
+    const { join } = await import('node:path');
+    const { readFileSync, existsSync, rmSync } = await import('node:fs');
+    const target = join(cwd, 'deep', 'nested', 'dir', 'file.md');
+    try {
+      const r = await runDynamicWorkflow({
+        script: `writeFile(${JSON.stringify(target)}, 'content'); return 'ok';`,
+        runSubagent: fakeRunner(),
+        ...base,
+        cwd,
+      });
+      expect(r.report).toBe('ok');
+      expect(existsSync(target)).toBe(true);
+      expect(readFileSync(target, 'utf-8')).toBe('content');
+    } finally {
+      try { rmSync(join(cwd, 'deep'), { recursive: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  it('writeFile 抛错时脚本可 catch', { timeout: T }, async () => {
+    // Z: 盘通常不存在，writeFile 会抛错，脚本 catch 后返回
+    const r = await runDynamicWorkflow({
+      script: `try { writeFile('Z:/nonexistent-drive/a/b/c.md', 'x'); } catch (e) { return 'caught:' + e.message; }`,
+      runSubagent: fakeRunner(),
+      ...base,
+      cwd,
+    });
+    expect(r.report).toContain('caught:');
+  });
+});
