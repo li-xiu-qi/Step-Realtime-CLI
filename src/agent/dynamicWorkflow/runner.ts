@@ -4,8 +4,10 @@ import type { QuickJSHandle } from 'quickjs-emscripten';
 import type { RunSubagentFn, SpawnSubagentRequest } from '../subagent/types.js';
 import type { WorkflowStepEvent } from '../events.js';
 import { Journal } from './journal.js';
-import { LogBuffer, injectPrimitives, type BudgetFn, type PhaseFn, type SpawnAgentFn } from './primitives.js';
+import { LogBuffer, injectPrimitives, type BudgetFn, type PhaseFn, type SpawnAgentFn, type WriteFileFn } from './primitives.js';
 import { DEFAULT_WALL_CLOCK_MS, DETERMINISM_PRELUDE, DynamicWorkflowSandbox, SandboxInterrupt } from './sandbox.js';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 /**
  * 动态工作流 runner：把模型现写的 JS 编排脚本包成 async 函数体，在零能力沙箱里执行。
@@ -279,6 +281,13 @@ export async function runDynamicWorkflow(opts: RunDynamicWorkflowOptions): Promi
     }
   };
 
+  /** writeFile 原语：宿主侧直接写文件，路径不受子 agent cwd 影响（解决路径嵌套 bug）。 */
+  const writeFile: WriteFileFn = (filePath, content) => {
+    const abs = isAbsolute(filePath) ? resolve(filePath) : resolve(opts.cwd, filePath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content, 'utf8');
+  };
+
   const sandbox = await DynamicWorkflowSandbox.create({
     signal: opts.signal,
     wallClockMs: opts.wallClockMs,
@@ -286,7 +295,7 @@ export async function runDynamicWorkflow(opts: RunDynamicWorkflowOptions): Promi
     maxInstructions: opts.maxInstructions,
   });
   try {
-    await injectPrimitives(sandbox, { spawn, logs, onPhase, onBudget });
+    await injectPrimitives(sandbox, { spawn, logs, onPhase, onBudget, writeFile });
 
     // 确定性 prelude + args 注入。
     const argsJson = JSON.stringify(opts.args ?? {});

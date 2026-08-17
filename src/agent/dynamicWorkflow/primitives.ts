@@ -2,12 +2,17 @@ import type { QuickJSContext } from 'quickjs-emscripten';
 import type { DynamicWorkflowSandbox } from './sandbox.js';
 
 /**
- * 编排原语注入：agent / parallel / pipeline / phase / budget。
+ * 编排原语注入：agent / parallel / pipeline / phase / budget / writeFile。
  * loop / 条件 / 提前终止不做原语——模型自己写 for / if / break，这是 JS 路线的核心红利。
  *
- * 桥接方式：宿主侧只注入底层函数 __agent(prompt, optsJson) / __log / __phase / __budget，
- * 五个原语在 guest prelude 里用纯 JS 定义。并发控制由宿主侧信号量统一完成，
+ * 桥接方式：宿主侧只注入底层函数 __agent / __log / __phase / __budget / __writeFile，
+ * 原语在 guest prelude 里用纯 JS 定义。并发控制由宿主侧信号量统一完成，
  * 因此 parallel 的 Promise.all 扇出天然受同一个并发上限约束。
+ *
+ * writeFile 原语背景（2026-08-17 实测）：workflow 脚本让子 agent 用 write_file 工具
+ * 落盘时存在两个可靠性问题——①子 agent 可能改写路径导致文件落入错误位置（路径嵌套）；
+ * ②workflow 靠检查返回内容里的 [FILE_WRITTEN:] 标记判断落盘，但子 agent 可以"声称"写了
+ * 而实际没写。writeFile 原语让宿主侧直接落盘，路径控制权完全在脚本侧，不经过 LLM。
  */
 
 /** 宿主侧派生子 agent 的实现（runner 注入，内含并发限制、计数护栏、journal、schema 校验重试）。 */
@@ -21,6 +26,9 @@ export type PhaseFn = (title: string) => void;
 
 /** 预算设定回调（runner 注入：收紧本 run 的 agent 上限 / wall-clock）。 */
 export type BudgetFn = (budget: { agents?: number; minutes?: number }) => void;
+
+/** 宿主侧写文件实现（runner 注入：自动创建父目录，路径由脚本侧完全控制）。 */
+export type WriteFileFn = (path: string, content: string) => void;
 
 /**
  * guest 侧 prelude：原语定义。失败语义全部收敛为 null（见设计文档第四节）。
@@ -59,6 +67,9 @@ globalThis.pipeline = (items, ...stages) => Promise.all(items.map(async (item) =
 globalThis.phase = (title) => __phase(String(title));
 // budget：收紧本 run 的预算（只能收紧不能放松）——agents 覆盖 agent 上限，minutes 收紧 wall-clock。
 globalThis.budget = (opts) => __budget(JSON.stringify(opts ?? {}));
+// writeFile：宿主侧直接写文件（绕过子 agent 的 write_file 工具，路径不受 cwd 影响）。
+// 返回 'ok' 或抛出 Error（脚本可 catch）。
+globalThis.writeFile = (path, content) => __writeFile(String(path), String(content));
 // 限额 console：脚本日志回宿主缓冲（条数与总量受限），不进主上下文，只在最终报告附带。
 globalThis.console = {
   log: (...args) => __log(args.map(String).join(' ')),
@@ -94,6 +105,7 @@ export interface InjectPrimitivesOptions {
   logs: LogBuffer;
   onPhase?: PhaseFn;
   onBudget?: BudgetFn;
+  writeFile?: WriteFileFn;
 }
 
 /**
@@ -103,7 +115,7 @@ export interface InjectPrimitivesOptions {
  */
 export async function injectPrimitives(sandbox: DynamicWorkflowSandbox, opts: InjectPrimitivesOptions): Promise<void> {
   const ctx: QuickJSContext = sandbox.context;
-  const { spawn, logs, onPhase, onBudget } = opts;
+  const { spawn, logs, onPhase, onBudget, writeFile } = opts;
 
   const agentFn = ctx.newFunction('__agent', (promptH, optsH) => {
     const prompt = ctx.getString(promptH);
@@ -172,6 +184,19 @@ export async function injectPrimitives(sandbox: DynamicWorkflowSandbox, opts: In
   });
   ctx.setProp(ctx.global, '__budget', budgetFn);
   budgetFn.dispose();
+
+  const writeFileFn = ctx.newFunction('__writeFile', (pathH, contentH) => {
+    const filePath = ctx.getString(pathH);
+    const content = ctx.getString(contentH);
+    try {
+      writeFile?.(filePath, content);
+      return ctx.newString('ok');
+    } catch (e) {
+      throw new Error(`writeFile() 失败：${(e as Error).message}（路径：${filePath}）`);
+    }
+  });
+  ctx.setProp(ctx.global, '__writeFile', writeFileFn);
+  writeFileFn.dispose();
 
   const preludeResult = await sandbox.eval(PRIMITIVES_PRELUDE, 'dwf-primitives.js');
   if (preludeResult.error !== undefined) {
