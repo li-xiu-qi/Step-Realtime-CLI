@@ -320,7 +320,11 @@ export async function runDynamicWorkflow(opts: RunDynamicWorkflowOptions): Promi
     const evalResult = await sandbox.eval(wrapped);
     if (evalResult.error !== undefined) {
       const err = dumpError(sandbox, evalResult.error);
-      throw new DynamicWorkflowError(`dynamic_workflow 脚本执行失败：${err.message}`, {
+      const tsHint = detectTsSyntax(opts.script);
+      const fullMessage = tsHint !== null
+        ? `dynamic_workflow 脚本执行失败：${err.message}\n\n${tsHint}`
+        : `dynamic_workflow 脚本执行失败：${err.message}`;
+      throw new DynamicWorkflowError(fullMessage, {
         runId,
         journalPath: journal.filePath,
         scriptPath,
@@ -398,4 +402,35 @@ function dumpError(sandbox: DynamicWorkflowSandbox, errorHandle: QuickJSHandle):
   } catch {
     return { message: '（错误对象无法序列化）' };
   }
+}
+
+/**
+ * 检测脚本是否包含 TypeScript 语法特征（QuickJS 沙箱只支持纯 JS）。
+ * 命中时返回友好提示，未命中返回 null。
+ *
+ * 检测模式（保守，宁可漏报不可误报）：
+ * - 类型注解：`: string` / `: number` / `: boolean` / `: void` / `: any` 等
+ * - 接口/类型声明：`interface X {` / `type X =`
+ * - 类型断言：`as Type` / `<Type>x`
+ * - 函数返回类型：`function foo(): Type`
+ */
+const TS_PATTERNS: RegExp[] = [
+  /:\s*(string|number|boolean|void|any|unknown|never|object|Record|Promise|Map|Set|Array)\b/,
+  /:\s*\w+(\[\])?\s*[=;,)}\]]/,  // 参数/变量类型注解
+  /\binterface\s+\w+/,
+  /\btype\s+\w+\s*=/,
+  /\bas\s+(string|number|boolean|const|unknown|any)\b/,
+  /function\s+\w+\s*\([^)]*\)\s*:\s*\w+/,
+  /\)\s*:\s*(string|number|boolean|void|Promise)\b/,
+];
+
+function detectTsSyntax(script: string): string | null {
+  for (const pattern of TS_PATTERNS) {
+    if (pattern.test(script)) {
+      return '⚠ 脚本似乎包含 TypeScript 语法（如类型注解 `: string`、`interface` 声明、`as` 断言等）。' +
+        'dynamic_workflow 的 QuickJS 沙箱只支持纯 JavaScript，不支持 TypeScript。' +
+        '请移除所有类型注解、接口声明和类型断言后重试。';
+    }
+  }
+  return null;
 }
