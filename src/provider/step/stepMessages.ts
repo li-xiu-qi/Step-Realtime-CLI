@@ -26,41 +26,12 @@ export interface StepMessagesProviderOptions {
 /**
  * 阶跃星辰 Messages 接口（`/v1/messages`）专用 provider。
  *
- * ## 为什么不复用 AnthropicMessagesProvider
+ * 不复用 AnthropicMessagesProvider：Step Messages 声明兼容，但思考控制参数不兼容——
+ * 官方 `thinking.budget_tokens` 在 Step 上接受但静默无效，Step 要的是 effort。
+ * 这类「静默无效」无法靠报错发现，只能显式适配，故单独成类。
+ * 只发 effort，绝不同发 thinking（实测同发比单发更差）。effort 落点见 {@link stepEffortParam}。
  *
- * Step 的 Messages 接口声明兼容 Anthropic Messages，但**思考控制参数不兼容**：
- *
- * | | Anthropic 官方（旧） | Step |
- * |---|---|---|
- * | 参数 | `thinking: { type, budget_tokens }` | `output_config: { effort }` |
- * | 官方参数在 Step 上的表现 | — | 接受但**静默无效** |
- *
- * 2026-08-02 实测（step-3.7-flash，max_tokens=2048，同一提问）：
- *
- * ```
- * thinking:{type:'enabled',budget_tokens:4096}  → stop_reason=max_tokens  正文 628 字符（截断）
- * effort:'low'                                  → stop_reason=end_turn    正文 803 字符（收尾）
- * thinking + effort 同发                        → stop_reason=max_tokens  正文 288 字符（更差）
- * ```
- *
- * 官方参数发出去不报错、也不起作用，思考照样吃满预算把正文挤掉。这类「静默无效」
- * 无法靠错误驱动重试发现，只能显式适配——这是本类存在的唯一理由。
- *
- * 同发两者的结果比只发 effort 更差，故本类**只发 effort，绝不发 thinking**。
- *
- * > **2026-08-03 更正**：上面那次实测里的 `effort:'low'` 用的是**顶层** `effort`，
- * > 位置错了。官方 step-3.7-flash 文档写明 Messages API 用 `output_config.effort`。
- * > 顶层写法不报错但不生效，当时观测到的「effort 比 thinking 好」实际是
- * > 「不发任何思考参数」与「发了 thinking」的对比，不是两种档位写法的对比。
- * > 现已改为 `output_config.effort`，详见 {@link stepEffortParam} 的注释。
- * > 这也与 Anthropic 官方方向一致：Claude 4.6 起 `budget_tokens` 标 deprecated，
- * > 同样迁移到 `output_config.effort`。
- *
- * ## 与官方类的其他差异
- *
- * - `sendCacheControl` 默认 false（Step 全通道不兼容），官方类默认 true。
- * - `max_tokens` 是 Step Messages 的**必填**参数（不发返回 400 `max_tokens must be positive`），
- *   与 Chat / Responses 的「缺省不限制」不同，因此这里必须始终发送。
+ * 与官方类的差异：sendCacheControl 默认 false（Step 不兼容）；max_tokens 必填（不发返回 400）。
  */
 export class StepMessagesProvider implements ChatProvider {
   private readonly client: Anthropic;

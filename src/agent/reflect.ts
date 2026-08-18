@@ -6,14 +6,9 @@ import type { StoredMessage } from './message.js';
 /**
  * /reflect 的核心：分段遍历完整对话历史（map → reduce），提炼可复用的通用方法论经验。
  *
- * 设计要点（对齐「对话回顾与经验沉淀」设计文档）：
- * - 自建循环、直接调 provider.stream，不进主 agent 循环，遍历过程不污染主上下文、也不触发压缩。
- * - map：把历史按 token 预算切成若干段，逐段用「提炼方法论」的 prompt 调模型，
- *   段间携带「已发现经验」的滚动摘要，保持连贯（对齐游走语义）。
- * - reduce：把各段经验点合并、去重、按重要性排序，产出最终清单。
- * - 护栏：段数上限，超限截断并在结尾给出提示。
- *
- * 纯函数：provider 以参数注入，便于单测用 fake provider 覆盖切段/map/reduce/护栏。
+ * 自建循环、直接调 provider.stream，不进主 agent 循环，遍历不污染主上下文、也不触发压缩：
+ * map 按 token 预算切段、逐段调模型，段间携带已发现经验的滚动摘要；reduce 合并去重排序。
+ * 段数超限截断。provider 以参数注入，便于单测用 fake provider 覆盖。
  */
 
 /** 空历史占位文案。App 侧据此判断：占位产出不注入会话流（注入了也没内容可选摘）。 */

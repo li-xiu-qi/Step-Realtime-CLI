@@ -135,16 +135,11 @@ export interface WebCacheConfig {
  *
  * enabled 默认 false：不主动发 thinking 字段，保持既有请求行为（部分服务端对该字段 400）。
  *
- * ## 用户接口是档位名，不是 token 数
+ * 用户接口只有档位名 `default_level`（low|medium|high），会话级用 `/think <档位>` 切换。
+ * 旧的 `[thinking] budget_tokens = <数字>` 已删除：该数字对阶跃渠道从未真正发出，只被用来
+ * 按硬编码阈值折算档位，用户改 levels 数字就会错档（配 medium=20000 实际发 high）。
  *
- * 唯一的用户旋钮是 `default_level`（low|medium|high），会话级用 `/think <档位>` 切换。
- * 曾经存在的 `[thinking] budget_tokens = <数字>` 已删除，原因是那个数字对阶跃渠道
- * **从未真正发出**：它只被用来折算档位，而折算阈值是硬编码的，用户改了
- * `[thinking.levels]` 的数字就会错档（配 medium=20000 实际发出 high）。
- * 让用户填一个既不会送达、又可能被错误折算的数字，是有害的接口。
- *
- * `levels` 表保留但语义降级为高级选项，作用范围只有原生 Anthropic 渠道，
- * 详见 {@link DEFAULT_THINKING_LEVELS} 的注释。
+ * `levels` 表保留但语义降级为高级选项，仅原生 Anthropic 渠道生效，见 {@link DEFAULT_THINKING_LEVELS}。
  */
 export interface ThinkingConfig {
   /** 是否主动发送 thinking 请求字段（budget 控制手段；思考本身是服务端固有行为，渲染不受影响）。 */
@@ -489,15 +484,9 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevelName = 'medium';
 /**
  * 内置档位 → budget token 数映射表。
  *
- * ## 这张表的作用范围很窄，别误解
- *
- * 它**只在原生 Anthropic 渠道（api.anthropic.com）生效**，在那条路径上被翻译成
- * `thinking.budget_tokens` 真实发出。阶跃三个接口一律不收数字，收的是
- * `effort: 'low'|'medium'|'high'` 字符串（见 provider/step/stepCommon.ts），
- * 档位名直接作为 effort 值发出，**根本不经过这张表**。
- *
- * 因此改这张表的数字，对阶跃渠道零影响。它属于高级选项，不是普通用户的调节旋钮——
- * 普通用户只需要 `default_level` 和 `/think <档位>`。
+ * 只在原生 Anthropic 渠道生效，被翻译成 `thinking.budget_tokens` 发出。阶跃三接口不收数字，
+ * 收 effort 字符串（见 provider/step/stepCommon.ts），档位名直达，不经过此表。
+ * 故改此表数字对阶跃渠道零影响，普通用户只需 `default_level` 和 `/think <档位>`。
  */
 export const DEFAULT_THINKING_LEVELS: Record<ThinkingLevelName, number> = {
   low: 1024,
@@ -884,13 +873,9 @@ function parseThinkingLevels(raw: unknown): Partial<Record<ThinkingLevelName, nu
  * default_level 缺省 {@link DEFAULT_THINKING_LEVEL}（medium），必须是 low|medium|high 之一。
  * levels 逐档合并进内置表（未配的档位保留内置值），只对原生 Anthropic 渠道生效。
  *
- * ## 已删除的两样东西
- *
- * 1. `budget_tokens` 键：见 {@link ThinkingConfig} 注释。出现即报错，不做折算兼容——
- *    静默折算会让用户以为自己填的数字生效了。
- * 2. `budget_tokens` 的正文余量校验：被校验的数字对阶跃渠道根本不会发出，
- *    校验它只提供虚假的安全感。levels 的余量校验保留，因为那些数字在原生
- *    Anthropic 渠道确实会发出（仅 enabled 时校验，未启用不发字段）。
+ * 旧的 `budget_tokens` 键已删除（见 {@link ThinkingConfig}）：出现即报错，不做静默折算兼容，
+ * 否则用户会以为填的数字生效了。其正文余量校验一并删除（该校验对阶跃渠道无效）；levels 的
+ * 余量校验保留，因那些数字在原生 Anthropic 渠道确实会发出。
  *
  * @param raw config.toml 里 [thinking] 段的原始值（可能为 undefined / 非对象）。
  * @param maxTokens 最终生效的 max_tokens（余量校验基准）。

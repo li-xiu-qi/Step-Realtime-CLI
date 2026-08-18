@@ -1,31 +1,13 @@
 /**
  * 阶跃星辰（StepFun）协议适配的公用件。
  *
- * ## 为什么需要这一层
+ * Step 三个接口分别声明兼容 OpenAI Chat Completions / Responses、Anthropic Messages，
+ * 但思考控制参数不通用：官方 `thinking.budget_tokens` 在 Step 上接受但静默无效，
+ * Step 要的是 effort。同一语义换了参数名与位置，通用适配层无法自动得出，须显式适配。
  *
- * Step 的三个接口分别声明兼容 OpenAI Chat Completions、OpenAI Responses、
- * Anthropic Messages。经 2026-08-02 逐参数实测 + 官方文档比对，兼容程度分三档：
- *
- * | 接口 | 与上游官方的关系 | 结论 |
- * |---|---|---|
- * | Chat Completions | 取值域是官方子集（无 `content_filter` / `function_call`），另加 `reasoning` / `reasoning_content` 双字段 | 兼容 |
- * | Responses | `status` / `incomplete_details.reason` 均为官方子集 | 兼容 |
- * | Messages | **官方 `thinking.budget_tokens` 接受但静默无效**，Step 要的是顶层 `effort` | **不兼容** |
- *
- * 最后一行是本模块存在的理由：同一语义（控制思考深度）换了参数名与嵌套位置，
- * 任何「按协议族推导」的通用适配层都无法自动得出，必须显式适配。
- *
- * ## 实测依据（step-code-labs/api-param-semantics/param-truth.mjs，step-3.7-flash）
- *
- * - `thinking:{type:'enabled',budget_tokens:4096}` → 200，`stop_reason=max_tokens`，正文仅 628 字符（被截断）
- * - `effort:'low'` → 200，`stop_reason=end_turn`，正文 803 字符（正常收尾）
- * - `reasoning_effort` 取 `xhigh` / `none` / `bogus` 均返回 200：**Step 不校验 effort 取值域**，
- *   非法值被静默忽略，因此无法靠报错探测支持性，必须由本模块在客户端侧收敛。
- * - `reasoning_format` 三种取值下 `reasoning` 与 `reasoning_content` **恒双写且等长**，
- *   与文档「二选一」描述不符 → 解析侧读任一字段皆可，不需要发这个参数。
- *
- * 官方取值域来源：`@anthropic-ai/sdk` 的 `StopReason` 类型（node_modules 内即权威）、
- * OpenAI 官方文档的 `finish_reason` / `incomplete_details.reason` 枚举。
+ * Step 不校验 effort 取值域（实测传非法值也返回 200），无法靠报错探测支持性，由本模块
+ * 在客户端收敛。reasoning_format 三种取值下 reasoning 与 reasoning_content 恒双写等长，
+ * 解析侧读任一即可，无需发送该参数。
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
@@ -56,19 +38,8 @@ export type StepChannel = 'messages' | 'chat' | 'responses';
  * - `chat`       → `{ reasoning_effort: 'low' }`（顶层）
  * - `responses`  → `{ reasoning: { effort: 'low' } }`（嵌套）
  *
- * ## messages 分支的位置曾经是错的（2026-08-03 修）
- *
- * 此前发的是**顶层 `effort`**，依据是早期实测「发了不报错」。但 Step 对未知参数
- * 一律静默忽略（见本文件头注释：`reasoning_effort` 传 `bogus` 也返回 200），
- * **「不报错」从来不能证明「生效」**。
- *
- * 官方[step-3.7-flash 文档](https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash)
- * 原文：「Chat Completions API 使用 `reasoning_effort` 控制推理强度；
- * Messages API 使用 `output_config.effort`」。这也与 Anthropic 官方方向一致——
- * Claude 4.6 起 `thinking.budget_tokens` 标记 deprecated，改用 `output_config.effort`。
- *
- * 症状：档位切换对 messages 通道完全无效果，且因为请求成功、思考照常返回，
- * 表面上一切正常，只有做配对实验统计输出 token 才能发现档位没起作用。
+ * messages 须用 `output_config.effort`：Step 对未知参数一律静默忽略，「不报错」不等于生效，
+ * 早期误发顶层 effort 实际被丢弃。
  *
  * @returns 可直接展开进请求体的片段；effort 为 undefined 时返回空对象（不发字段，走服务端默认）。
  */

@@ -53,16 +53,9 @@ export function createProvider(config: StepCodeConfig): ChatProvider {
   // [thinking] enabled=true 时覆盖为 true；anthropic 预设虽为 true，未配 [thinking]
   // 时 thinking 参数为空，照样不发。
   //
-  // ## 为什么下发的对象同时带 level 和 budgetTokens
-  //
-  // 两类协议要的东西不同，且不可互相推导：
-  // - 阶跃三接口只收档位字符串（low|medium|high），必须原样拿到 level；
-  // - 原生 Anthropic 只收数字 thinking.budget_tokens，必须拿到 budgetTokens。
-  //
-  // 曾经只下发 budgetTokens，由 provider 用 budgetToEffort() 反推档位。那个反推
-  // 阈值是硬编码的，用户改 [thinking.levels] 的数字就会错档（配 medium=20000
-  // 反推出 high），且属于「先把档位编码成数字、再猜回档位」的无谓损耗。
-  // 现在档位名直达，数字只喂给真正需要它的那一条路径。
+  // 两类协议要的东西不同，且不可互相推导：阶跃三接口只收档位字符串（low|medium|high），
+  // 原生 Anthropic 只收数字 thinking.budget_tokens。曾经只下发 budgetTokens 再由 provider
+  // 反推档位，阈值硬编码导致改 levels 数字会错档；现档位名直达，数字只喂给真正需要它的路径。
   const thinkingEnabled = config.thinking?.enabled === true;
   const sendThinking = preset.sendThinking || thinkingEnabled;
   const level = config.thinking?.defaultLevel ?? DEFAULT_THINKING_LEVEL;

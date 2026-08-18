@@ -76,26 +76,9 @@ export function thinkStatusLabel(
 /**
  * /think 门控：当前渠道允许下发思考控制字段时才可用。
  *
- * ## 曾经的错误：只放行 anthropic 协议
- *
- * 旧实现要求 `preset.protocol === 'anthropic'`，依据是「thinking 请求字段只有
- * Anthropic Messages 才有」。这个前提是错的——阶跃三个接口都有思考强度参数，
- * 只是名字和层级不同（见 provider/step/stepCommon.ts 的 stepEffortParam）：
- *
- * | 协议 | 参数 |
- * |---|---|
- * | anthropic（Messages） | `output_config.effort` |
- * | openai（Chat Completions） | `reasoning_effort` |
- * | openai_responses（Responses） | `reasoning.effort` |
- *
- * 依据：[官方 step-3.7-flash 文档](https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash)
- * 「Chat Completions API 使用 reasoning_effort 控制推理强度；Messages API 使用 output_config.effort」。
- *
- * 后果：用 openai / openai_responses 渠道时 /think 被拒、状态栏不显示档位，
- * 而 provider 工厂其实已经在给这两条路径下发 effort——UI 说「不支持」，底层却在发，自相矛盾。
- *
- * 现在的口径与 provider 工厂完全一致：`preset.sendThinking || [thinking] enabled`，
- * 不再看协议。providerName 为当前生效渠道（预设名或自定义渠道的 type）。
+ * 不按协议放行：阶跃三个接口都有思考强度参数（名字/层级不同，见 stepEffortParam），
+ * 旧实现只放行 anthropic 会让 openai / openai_responses 渠道的 /think 被拒，而 provider
+ * 工厂其实已在下发 effort——UI 与底层自相矛盾。现口径与工厂一致：sendThinking || enabled，不看协议。
  */
 export function thinkingAvailable(providerName: string, thinkingCfg?: ThinkingConfig): boolean {
   const preset = PROVIDER_PRESETS[providerName];
@@ -113,17 +96,10 @@ export const THINK_CHOICES: readonly ThinkingLevelName[] = THINKING_LEVEL_NAMES;
 /**
  * 切档安全判定：档位对应的 budget 是否给正文留出 {@link THINKING_TEXT_MARGIN} 余量。
  *
- * ## 这个判定为什么还留着（理由已经和当初不同）
- *
- * 它原本的依据是「budget_tokens 会被发出，占掉 max_tokens」。对阶跃渠道这个依据是错的——
- * 三个接口都不收数字，只收档位字符串，`[thinking.levels]` 的数字根本不出现在请求里。
- *
- * 但结论仍然成立，换了条依据：2026-08-03 实测，**high 档本身就会让思考吃满 max_tokens
- * 导致正文零输出**（这正是「服务端返回了空响应」的根因之一）。所以「切到高档 + max_tokens
- * 偏小」这个组合确实危险，警告该给。levels 表的数字在这里的角色从「即将发出的参数」
- * 降级为「档位思考量的估算刻度」——不精确，但单调性对得上，用来排序风险够用。
- *
- * off/undefined（无档位）恒安全。deficit 为正表示欠缺的余量（供提示展示）。
+ * 该判定保留，但依据已变：阶跃三接口不收 levels 数字，原依据「budget_tokens 占掉
+ * max_tokens」不成立。但结论仍成立——high 档本身会让思考吃满 max_tokens 导致正文零输出，
+ * 「切高档 + max_tokens 偏小」确实危险，警告该给。levels 数字的角色降级为档位思考量的
+ * 估算刻度（不精确但单调性对得上，够排序风险）。off/undefined 恒安全；deficit 为正表示欠缺余量。
  */
 export function thinkBudgetSafety(
   override: ThinkOverride | undefined,

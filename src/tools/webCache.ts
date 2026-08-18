@@ -1,36 +1,16 @@
 /**
  * 网页结果缓存（WebResultCache）。
  *
- * 缓存两层来源：
- *  - `search`：web_search 搜索结果 API 返回的 content 字段（摘要增强版）
- *  - `fetch`：web_fetch 本地提取的完整正文（更完整）
+ * 缓存两层来源：search（web_search 的 content 摘要）、fetch（web_fetch 提取的完整正文）。
+ * web_fetch 优先读缓存（命中且未过期直接返回）；web_search 每次执行后写入，供后续复用。
  *
- * web_fetch 优先读缓存，命中且未过期则直接返回；未命中或过期才走网络。
- * web_search 每次执行后把结果写入缓存，供后续 web_fetch 复用。
+ * 按字节 + 条目数双上限记账：早先只有条目数上限、单篇正文唯一约束是 web_fetch 的 10MB，
+ * 淘汰对 1KB 与 10MB 一视同仁，长会话 OOM 的主因（多子 agent 并行抓取时共享进程级单例）。
+ * 字节按 str.length*2 估算（V8 对含非 Latin1 的串用 2 字节/字符）；不用 Buffer.byteLength，
+ * 它对纯 ASCII 正文会低估一半。
  *
- * ## 为什么按字节记账，不只按条目数
- *
- * 早先只有 `maxSize = 100`（条目数）一道上限，而单篇正文的唯一约束是 web_fetch 的
- * `MAX_BYTES = 10MB`（且只拦响应体、不拦提取后正文），淘汰逻辑对 1KB 与 10MB 的条目
- * 一视同仁。理论上限 100 × 10MB × UTF-16 双字节 ≈ 2GB，实测灌 150 条 × 2MB 中文正文
- * 后堆驻留 799.4MB（同样输入、仅把缓存清空则为 14.4MB，差 100 倍）。这是长会话 OOM
- * 的主因——尤其多个子 agent 并行抓网页时，它们共享这一个进程级单例，100 条额度被
- * 数倍速填满。
- *
- * 因此改为「字节 + 条目数」双上限，两者任一超限即淘汰。字节按 `str.length * 2` 估算
- * （V8 对含非 Latin1 字符的字符串用 SeqTwoByteString，每字符 2 字节）；不用
- * `Buffer.byteLength(s,'utf8')`，因为它对纯 ASCII 正文会低估一半。
- *
- * ## 为什么 TTL 要主动顺扫
- *
- * TTL 原先只在 `get()` 里惰性检查：没人再读的条目永不过期。子 agent 抓完即走，
- * 那些正文没有第二次 `get`，于是驻留到被条目数挤出为止——4.8 小时的会话理论上该过期
- * 9 轮，实际一条未清。改为 `set()` 时顺扫（n ≤ maxSize，成本可忽略）。
- *
- * ## 为什么不直接用 lru-cache
- *
- * 它的 `maxSize` + `sizeCalculation` 确实是现成方案，但本缓存只有 get/set/clear 三个操作，
- * 引入一个依赖换几十行代码不划算；且自己记账能与实测口径（`length * 2`）保持一致。
+ * TTL 在 set() 时顺扫而非 get() 惰性检查：子 agent 抓完即走、没有第二次 get，惰性检查
+ * 会让条目驻留到被条目数挤出。不自建 lru-cache：只有 get/set/clear 三个操作，引入依赖不划算。
  */
 
 /** 字符串的堆字节估算：V8 对含非 Latin1 字符的串用 2 字节/字符，取上界。 */
