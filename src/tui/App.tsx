@@ -380,6 +380,9 @@ export function App({
   // `/compact-model` 的会话级覆盖：非 undefined 时优先于 config.compaction.model（不落盘，
   // /new 与重启后回到 config；与 /model 的会话级语义一致）。/reload 重解时保留。
   const compactionModelOverrideRef = useRef<string | undefined>(undefined);
+  // /rename 模式：true 时下一次 Enter 提交不发给模型，而是作为新名字存盘。
+  // 用 ref 而非 state：submit 是 useCallback，读 ref 闭包总拿到即时值。
+  const renamePendingRef = useRef(false);
   const compactionBindingRef = useRef(resolveCompactionBinding(config, compactionProviderCache.current));
   // 当前模型的别名绑定：/model 别名切换成功记别名、裸 id 切换置 null（/provider 切换亦置 null——
   // 别名绑定已断）；/resume 经 applyModelAlias 反查路径同步维护。/reload 据此决定 provider 重建策略。
@@ -1970,6 +1973,8 @@ export function App({
       const parsed = parseSlash(raw, pluginCommandNames);
       if (parsed === null) return false;
       const { name, args } = parsed;
+      // /rename 后再输入别的命令：清除 rename flag（防止 submit 拦截）
+      renamePendingRef.current = false;
       switch (name) {
         case 'help':
           pushItem({ kind: 'note', text: helpText() });
@@ -2714,6 +2719,14 @@ export function App({
           }
           break;
         }
+        case 'rename': {
+          // /rename：用输入框改当前会话名（留空清除）。
+          // 设 flag → submit 拦截 → 读输入作为新名字 → store.rename。
+          const current = sessionRef.current.name ?? sessionRef.current.title ?? '';
+          renamePendingRef.current = true;
+          setInput(current);
+          break;
+        }
         case 'resume': {
           // 全局会话切换只列主会话：子 agent 会话不再混入（它们不能切换过去对话，
           // 只能只读下钻，混在切换列表里语义错位且占行；全量解析也是 /resume 卡顿
@@ -2895,6 +2908,21 @@ export function App({
     async (raw: string, opts?: { recordHistory?: boolean; silent?: boolean; prepared?: StoredMessage; fromQueue?: boolean }) => {
       // 粘贴占位符先还原为原文，再进图片提取：queue/steer/hook/history/displayText 全部拿到还原后的全文
       const text = pasteStore.current.expandPasteMarkers(raw).trim();
+      // /rename 拦截：输入作为新名字存盘，不走正常发送流程（含空文本 = 清除自定义名）
+      if (renamePendingRef.current) {
+        renamePendingRef.current = false;
+        const ok = store.rename(ctx.cwd, sessionRef.current.id, text);
+        if (ok) {
+          if (text === '') delete sessionRef.current.name;
+          else sessionRef.current.name = text;
+          syncTerminalTitle();
+          pushItem({ kind: 'note', text: text === '' ? t('session.rename.cleared') : t('session.rename.success', { name: text }) });
+        } else {
+          pushItem({ kind: 'error', text: t('session.rename.failed') });
+        }
+        setInput('');
+        return;
+      }
       const extracted = extractImageContent(text, imageStore.current);
       const imgCount = extracted.imageCount;
       // 能力拦截：当前模型显式声明不收图（capabilities 含 -image_in）时带图提交直接拦下——
