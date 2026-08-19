@@ -102,6 +102,18 @@ export function historyToDisplayItems(
       items.push({ kind: 'note', text: replayBackgroundNote(origin) });
       continue;
     }
+    if (systemAuthored && origin.kind === 'compaction_summary') {
+      // 投影真正的交接摘要正文，而非一句泛泛提示。压缩把旧 assistant 回复摘要进这条消息，
+      // resume 后若只显示「已压缩」，用户会看到满屏自己早先的消息却无模型回复、误以为输出丢失
+      // （与 pi 版同款修复，实证：多次压缩的会话 resume 后 user 消息连排，旧 assistant 全在摘要里）。
+      // 空摘要才回退通用提示。
+      const summary = typeof message.content === 'string' ? message.content : '';
+      items.push({
+        kind: 'note',
+        text: summary.trim() !== '' ? summary : t('historyReplay.compactedNote'),
+      });
+      continue;
+    }
 
     const { role, content } = message;
 

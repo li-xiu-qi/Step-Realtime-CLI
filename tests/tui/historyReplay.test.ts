@@ -128,13 +128,18 @@ describe('historyToDisplayItems', () => {
       expect(items.some((i) => (i.text ?? '').includes('这不是系统错误'))).toBe(false);
     });
 
-    it('压缩摘要不渲染成用户气泡', () => {
+    it('压缩摘要不渲染成用户气泡，而是投影成 note（摘要正文可见）', () => {
+      // 旧行为是整条丢弃，导致 resume 后满屏用户消息却看不到模型输出（assistant 都折叠进了摘要）。
+      // 现行为与 pi 版对齐：摘要正文投影成 note，仍不冒充用户输入。
       const messages: StoredMessage[] = [
         m({ role: 'user', content: '之前聊到的内容摘要……' }, 'compaction_summary', 'cs1'),
         m({ role: 'user', content: '继续' }, 'user', 'u1'),
       ];
       const { items } = historyToDisplayItems(messages);
-      expect(items).toEqual([{ kind: 'user', text: '继续' }]);
+      expect(items).toEqual([
+        { kind: 'note', text: '之前聊到的内容摘要……' },
+        { kind: 'user', text: '继续' },
+      ]);
     });
 
     it('后台任务通知降级为 note，XML 信封正文不外泄', () => {
@@ -152,6 +157,32 @@ describe('historyToDisplayItems', () => {
       expect(items[0]?.kind).toBe('note'); // 不是 user
       expect(items[0]?.text).toContain('bg1');
       expect(items[0]?.text).not.toContain('<notification'); // 给模型看的信封不摆给用户
+    });
+
+    it('压缩摘要投影成 note 且展示真实摘要正文（不冒充用户输入）', () => {
+      // 实证根因：resume 后满屏用户消息、旧 assistant 全在摘要里，若只显示一句泛泛提示，
+      // 用户会以为模型输出没恢复。摘要正文必须投影出来，才解释得清中间那段发生了什么。
+      const summaryBody = '[早期对话摘要]\n# 交接笔记\n上一轮修了宽度崩溃与定时任务跨会话串台。';
+      const messages: StoredMessage[] = [
+        m({ role: 'user', content: summaryBody }, 'compaction_summary', 'cs1'),
+        m({ role: 'user', content: '继续' }, 'user', 'u1'),
+      ];
+      const { items } = historyToDisplayItems(messages);
+      expect(items).toHaveLength(2);
+      expect(items[0]?.kind).toBe('note');
+      // 展示真实摘要正文，而非泛泛提示
+      expect(items[0]?.text).toContain('宽度崩溃');
+      expect(items[1]).toEqual({ kind: 'user', text: '继续' });
+    });
+
+    it('压缩摘要为空时回退通用提示 note', () => {
+      const messages: StoredMessage[] = [
+        m({ role: 'user', content: '   ' }, 'compaction_summary', 'cs-empty'),
+      ];
+      const { items } = historyToDisplayItems(messages);
+      expect(items).toHaveLength(1);
+      expect(items[0]?.kind).toBe('note');
+      expect(items[0]?.text).toBeTruthy();
     });
 
     it('user_verbatim（压缩保真的真人原话）仍作为用户输入保留', () => {
