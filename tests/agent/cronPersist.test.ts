@@ -43,6 +43,8 @@ describe('CronJobStore', () => {
     const loaded = store.load(cwd);
     expect(loaded).toHaveLength(1);
     expect(loaded[0]).toMatchObject({ id: job.id, cron: '0 9 * * *', prompt: '早上提醒', recurring: true });
+    // sessionId 随任务落盘往返（装配层靠它隔离各会话的定时任务）
+    expect(loaded[0]!.sessionId).toBe(job.sessionId);
     // 其他 cwd 看不到这份任务表
     expect(store.load('D:/other')).toHaveLength(0);
   });

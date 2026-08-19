@@ -623,6 +623,7 @@ export function App({
         else void cronStore.current.remove(ctx.cwd, job.id);
       },
       () => !busyRef.current,
+      sessionRef.current.id,
     );
     cron.current.onJobChange = (kind, job) => {
       if (kind === 'create') void cronStore.current.save(ctx.cwd, job);
@@ -630,7 +631,15 @@ export function App({
     };
     // 恢复本 cwd 的任务表（坏文件已在 load 静默丢弃）；stale 由 restore 剔除并清盘，
     // 离线漏跑由 tick 的 coalesce 逻辑补投（一次性任务过期补投一次）
-    const staleIds = cron.current.restore(cronStore.current.load(ctx.cwd));
+    // session 隔离：只恢复当前 session 创建的 cron 任务，旧会话的不加载——否则同一工作目录下
+    // 不同会话的定时任务会互相串台（实测：新会话启动后，旧会话针对其他工作目录
+    // 创建的任务被自动恢复并执行）。与另一前端实现同款过滤。
+    const allCronJobs = cronStore.current.load(ctx.cwd);
+    const myCronJobs = allCronJobs.filter((j) => j.sessionId === sessionRef.current.id);
+    const droppedCron = allCronJobs.length - myCronJobs.length;
+    // pushItem 在本块之后才声明（useCallback，708 行），延后一帧推送，避开 TDZ。
+    if (droppedCron > 0) setTimeout(() => pushItem({ kind: 'note', text: `跳过 ${droppedCron} 个其他会话的定时任务` }), 0);
+    const staleIds = cron.current.restore(myCronJobs);
     for (const id of staleIds) void cronStore.current.remove(ctx.cwd, id);
   }
 

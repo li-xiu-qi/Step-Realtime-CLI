@@ -63,6 +63,33 @@ describe('CronScheduler', () => {
     expect(sched.list()).toHaveLength(0);
     sched.stop();
   });
+
+  /**
+   * 2026-08-19 用户反馈：新会话启动后，旧会话（同工作目录）创建的 cron 任务被自动恢复
+   * 并触发，旧任务的 prompt 在新会话里继续执行。
+   *
+   * 根因：cron 任务按 cwd 存储（不按 session），装配层 restore 时没按 sessionId 过滤，
+   * 把同 cwd 下所有会话的任务都恢复了。修复：装配层 restore 前 filter(sessionId === 当前)。
+   * 本测试钉住「快照带 sessionId」这一前提——装配层的过滤依赖它。
+   */
+  it('create 把当前 sessionId 写进任务（装配层据此隔离各会话）', () => {
+    const sched = new CronScheduler((j) => {}, () => true, 'session-X', 100);
+    const job = sched.create('*/5 * * * *', '任务', true);
+    expect(job.sessionId).toBe('session-X');
+    sched.stop();
+  });
+
+  it('restore 读回快照的 sessionId（旧快照无该字段时兜底为空串）', () => {
+    const sched = new CronScheduler((j) => {}, () => true, 'session-Y', 100);
+    sched.restore([
+      { id: 'a', cron: '0 * * * *', prompt: 'p', recurring: true, nextFireAt: new Date(Date.now() + 3600_000).toISOString(), createdAt: Date.now(), sessionId: 'session-A' },
+      { id: 'b', cron: '0 * * * *', prompt: 'p', recurring: true, nextFireAt: new Date(Date.now() + 3600_000).toISOString(), createdAt: Date.now() },
+    ]);
+    const byId = new Map(sched.list().map((j) => [j.id, j]));
+    expect(byId.get('a')!.sessionId).toBe('session-A');
+    expect(byId.get('b')!.sessionId).toBe(''); // 旧快照无 sessionId → 空串
+    sched.stop();
+  });
 });
 
 describe('cron 工具', () => {
