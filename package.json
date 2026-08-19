@@ -1,10 +1,10 @@
 {
-  "name": "step-code",
+  "name": "step-code-ink",
   "version": "0.1.2",
   "description": "Step Code — 阶跃星辰 Step 系列模型驱动的终端编码 agent CLI。",
   "type": "module",
   "bin": {
-    "step": "dist/main.js"
+    "step-ink": "dist/main.js"
   },
   "files": [
     "dist",
