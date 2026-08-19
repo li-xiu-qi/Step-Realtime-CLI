@@ -604,10 +604,13 @@ export function App({
   // plugin 命令注册表：<pluginId>:<commandName> → 模板（启动时由组合根注入，运行期不变）。
   const pluginCommandMap = useMemo(() => new Map((pluginCommands ?? []).map((c) => [c.name, c])), [pluginCommands]);
   const pluginCommandNames = useMemo(() => new Set(pluginCommandMap.keys()), [pluginCommandMap]);
-  // cron 任务持久层：按 cwd 分桶落盘（不属于单个会话），变更即异步写、失败只 warn
+  // cron 任务持久层：按 cwd 分桶落盘（session 级：每个 job 带创建者 sessionId），变更即异步写、失败只 warn
   const cronStore = useRef(new CronJobStore(store));
   // cron 调度器：fire 时经 cronFireRef 注入会话；isIdle = 当前不忙。
-  // 调度器保持纯内存引擎，持久化叠加在此装配层：create/delete 走 onJobChange，触发推进 nextFireAt 后补写
+  // 调度器保持纯内存引擎，持久化叠加在此装配层：create/delete 走 onJobChange，触发推进 nextFireAt 后补写。
+  // 「cron.current === null」守卫使装配只在首次 render 跑（startup）。切会话时 cron 实例不自动重建，
+  // 故三个切会话 handler 主动 cron.current?.stop() + cron.current = null，逼下次 render 以新 sessionId
+  // 重建——否则旧任务在新会话触发（P0 串台）、新任务被打陈旧 sessionId 下次加载不到。
   const cron = useRef<CronScheduler | null>(null);
   if (cron.current === null) {
     cron.current = new CronScheduler(
@@ -1796,15 +1799,25 @@ export function App({
       imageStore.current.clear();
       pasteStore.current.clear();
       sessionRef.current = data;
-      // 后台任务管理器换绑到恢复的会话：任务落盘目录随会话切换（旧管理器的在途任务属于旧会话，不再接管），
-      // 随即对账（resume 第 4 步）：磁盘 running 无活进程 → lost；终态未送达 → 入发送队列补投。
+      // 后台任务管理器换绑到恢复的会话：任务落盘目录随会话切换。
+      // 旧管理器的在途任务属于旧会话：先整体终止并断开结算回调，否则其 settle 经共享 handler
+      // 回灌到新会话（旧任务完成 note / 终端响铃误报），与 cron 跨 session 串台同源。
+      const oldBg = background.current;
       background.current = new BackgroundManager(10, {
         taskTimeoutS: configRef.current.background?.bashTaskTimeoutS ?? 600,
         tasksDir: store.tasksDirFor(ctx.cwd, data.id),
         onSettleEvent: (task) => appendWireEvent({ type: 'background.task_settle', ts: new Date().toISOString(), task }),
         onSettle: (task) => settleHandlerRef.current?.(task),
       });
+      oldBg?.shutdown();
       const { redeliver, lost } = background.current.reconcile(delivered);
+      // cron 跟着目标会话走：停旧计时器并置空，下次 render 的 null 守卫以新 sessionId 重建+重装。
+      cron.current?.stop();
+      cron.current = null;
+      // compactionModelOverride 是会话级内存态（不落盘）：跨会话不重置会串走。
+      compactionModelOverrideRef.current = undefined;
+      // 排队消息属于旧会话现场：切走要清空，否则 turnEnd drain 灌进新会话。
+      queue.current = [];
       // lost 的 team worker 后台任务：同步标 blocked（fire-and-forget，不阻塞恢复流程）
       for (const task of lost) {
         const m = /^team·([A-Z]\d+)\s/.exec(task.command);
@@ -2404,14 +2417,26 @@ export function App({
           forked.messages = history.current;
           forked.todos = todos.current;
           sessionRef.current = forked;
-          // 后台任务管理器换绑到新 fork 会话：任务落盘目录随会话切换；
-          // 旧管理器在途任务（属于旧会话）不再接管，新任务落到新会话目录。
+          // 后台任务管理器换绑到新 fork 会话：任务落盘目录随会话切换。
+          // 旧管理器的在途任务属于旧会话：先整体终止并断开结算回调，防止 settle 经共享 handler
+          // 回灌到新会话，与 cron 跨 session 串台同源。
+          const oldBg = background.current;
           background.current = new BackgroundManager(10, {
             taskTimeoutS: configRef.current.background?.bashTaskTimeoutS ?? 600,
             tasksDir: store.tasksDirFor(ctx.cwd, forked.id),
             onSettleEvent: (task) => appendWireEvent({ type: 'background.task_settle', ts: new Date().toISOString(), task }),
             onSettle: (task) => settleHandlerRef.current?.(task),
           });
+          oldBg?.shutdown();
+          // cron：停旧计时器并置空，下次 render 以新 sessionId 重建（fork 是新会话，不复用旧任务）。
+          cron.current?.stop();
+          cron.current = null;
+          // compactionModelOverride 是会话级内存态（不落盘）：fork 不串走。
+          compactionModelOverrideRef.current = undefined;
+          // 排队消息属于旧会话现场：切走清空。
+          queue.current = [];
+          // 清空动态工具：/fork 此前漏调，会让源会话 tool_search 加载的工具泄漏到 fork 会话。
+          clearDynamicTools();
           // fork 不继承 goal：清掉内存态与徽标（源会话的 goal 字段已在盘上，不受影响）
           goal.current.restore(null);
           setGoalView(null);
@@ -2440,14 +2465,24 @@ export function App({
           pasteStore.current.clear();
           // 新会话 model 存别名（同 persist 口径），避免真实 id 被 resolveStartupModelAlias 误反查
           sessionRef.current = store.create(ctx.cwd, currentModelAliasRef.current ?? model);
-          // 后台任务管理器换绑到新会话：任务落盘目录随会话切换；
-          // 旧管理器在途任务（属于旧会话）不再接管，新任务落到新会话目录。
+          // 后台任务管理器换绑到新会话：任务落盘目录随会话切换。
+          // 旧管理器的在途任务属于旧会话：先整体终止并断开结算回调，防止 settle 经共享 handler
+          // 回灌到新会话（旧任务完成 note / 终端响铃误报），与 cron 跨 session 串台同源。
+          const oldBg = background.current;
           background.current = new BackgroundManager(10, {
             taskTimeoutS: configRef.current.background?.bashTaskTimeoutS ?? 600,
             tasksDir: store.tasksDirFor(ctx.cwd, sessionRef.current.id),
             onSettleEvent: (task) => appendWireEvent({ type: 'background.task_settle', ts: new Date().toISOString(), task }),
             onSettle: (task) => settleHandlerRef.current?.(task),
           });
+          oldBg?.shutdown();
+          // cron：停旧计时器并置空，下次 render 的 null 守卫以新 sessionId 重建+重装（防旧任务串台 P0）。
+          cron.current?.stop();
+          cron.current = null;
+          // compactionModelOverride 是会话级内存态（不落盘）：新会话回落 config，不串走。
+          compactionModelOverrideRef.current = undefined;
+          // 排队消息属于旧会话现场：切走清空，否则 turnEnd drain 灌进新会话。
+          queue.current = [];
           sessionApprovals.current.clear();
           // 新会话不继承上一会话的 goal（goal 随会话持久化，新会话从头开始）
           goal.current.restore(null);

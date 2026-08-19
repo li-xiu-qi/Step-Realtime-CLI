@@ -725,4 +725,21 @@ export class BackgroundManager {
     this.settle(t);
     return true;
   }
+
+  /**
+   * 切会话 / 退出时整体终止：置空结算回调 + 终止全部在途任务 + 清空待投递队列。
+   *
+   * 与 pi 版同源：rebindBackground 只换 background.current 引用、不终止旧管理器，旧管理器
+   * 在途任务 settle 时回调经共享 handler 回灌到新会话（旧任务完成 note 与终端响铃误报）。
+   * 先置空 onSettle/onSettleEvent，后续 stop() 触发的 settle 全部短路，零回灌。
+   * 每个任务也补清 onStop/proc/getPartialOutput 三字段，防 OOM（终态后这些字段无读取方）。
+   */
+  shutdown(): void {
+    this.options.onSettle = undefined;
+    this.options.onSettleEvent = undefined;
+    for (const t of this.tasks.values()) {
+      if (t.status === 'running') this.stop(t.id); // kill proc + onStop 中止 async + settle（回调已空，零回灌）
+    }
+    this.pendingSettled.length = 0;
+  }
 }

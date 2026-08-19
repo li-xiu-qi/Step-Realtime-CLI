@@ -51,8 +51,10 @@ export class CronScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   /** 任务表变更通知（装配层挂持久化，可选）。 */
   onJobChange: CronJobChangeHandler | null = null;
-  /** 所属会话 ID：用于 session 隔离，新会话不加载旧会话的 cron 任务。 */
-  private readonly sessionId: string;
+  /** 所属会话 ID：用于 session 隔离，新会话不加载旧会话的 cron 任务。
+   *  非 readonly：切会话（/new、/resume）时经 rebindSession 重绑，
+   *  否则新建任务被打上陈旧 sessionId、下次启动过滤加载不到。 */
+  private sessionId: string;
 
   constructor(
     private readonly onFire: CronFireHandler,
@@ -122,6 +124,18 @@ export class CronScheduler {
 
   stop(): void {
     this.stopTimer();
+  }
+
+  /**
+   * 切会话时重绑：清空内存任务表、停计时器、改用新 sessionId。
+   * 新会话不继承旧会话的任务（属旧现场），调用方随后 restore 本会话自己的任务。
+   * 与 cron 跨 session 隔离配套：旧任务留在内存 tick 到点照常 onFire → 旧会话定时任务在新会话触发；
+   * 不换 sessionId 则新会话 create 的任务被打上陈旧 sessionId，下次启动过滤加载不到。
+   */
+  rebindSession(sessionId: string): void {
+    this.jobs.clear();
+    this.stopTimer();
+    this.sessionId = sessionId;
   }
 
   /** 每个 tick：到点的任务触发（isIdle 才触发；错过合并 coalesce）。 */

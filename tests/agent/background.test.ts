@@ -84,6 +84,31 @@ describe('BackgroundManager onSettle', () => {
     expect(settled[0]!.status).toBe('killed');
   });
 
+  it('shutdown 终止在途任务并断开结算回调（防切会话回灌，P0 同源）', async () => {
+    // rebindBackground 只换引用不终止旧管理器，旧管理器在途任务 settle 时经共享 handler
+    // 回灌到新会话（旧任务完成 note / 终端响铃误报）。shutdown 先置空回调再杀任务，零回灌。
+    const settled: BackgroundTask[] = [];
+    const mgr = new BackgroundManager(10, { onSettle: (t) => settled.push(t) });
+    const procId = mgr.start('long', SH, shArgs(LONG_CMD), process.cwd());
+    // 延迟 resolve 的 async 任务，模拟尚未完成的后台子 agent
+    let resolveLate!: (v: { output: string; ok: boolean }) => void;
+    mgr.startTask('async·未完成', new Promise<{ output: string; ok: boolean }>((res) => { resolveLate = res; }), undefined, {
+      kind: 'subagent',
+    });
+
+    mgr.shutdown();
+
+    // 在途 proc 任务被终止，不再是 running
+    expect(mgr.get(procId)?.status).not.toBe('running');
+    // 回调已断开：shutdown 期间 stop() 触发的 settle 不外泄
+    expect(settled).toHaveLength(0);
+
+    // async 任务在 shutdown 之后才 resolve，结算回调已断开，仍不外泄
+    resolveLate({ output: 'late', ok: true });
+    await sleep(50);
+    expect(settled).toHaveLength(0);
+  });
+
   it('去重：同一任务终态后 stop 不再触发，onSettle 只发一次', async () => {
     const settled: BackgroundTask[] = [];
     const mgr = new BackgroundManager(10, { onSettle: (t) => settled.push(t) });

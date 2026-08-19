@@ -90,6 +90,23 @@ describe('CronScheduler', () => {
     expect(byId.get('b')!.sessionId).toBe(''); // 旧快照无 sessionId → 空串
     sched.stop();
   });
+
+  it('rebindSession 清空旧任务并换 sessionId（进程内切会话，防旧任务在新会话触发）', () => {
+    // P0 同源：CronScheduler 实例随 App 存活，sessionId 原为 readonly。切会话不重绑则旧任务
+    // 留在内存 tick 到点照常 fire（旧会话 cron prompt 灌进新会话），且新任务被打旧 sessionId 下次加载不到。
+    const fired: string[] = [];
+    const sched = new CronScheduler((j) => fired.push(j.prompt), () => true, 'session-A', 100);
+    sched.create('* * * * *', 'A 的旧任务');
+    expect(sched.list()).toHaveLength(1);
+
+    sched.rebindSession('session-B');
+    expect(sched.list()).toHaveLength(0); // 旧任务已清
+    const newJob = sched.create('* * * * *', 'B 的新任务');
+    expect(newJob.sessionId).toBe('session-B'); // 新任务带新 sessionId
+
+    sched.stop();
+    expect(fired).toHaveLength(0);
+  });
 });
 
 describe('cron 工具', () => {
