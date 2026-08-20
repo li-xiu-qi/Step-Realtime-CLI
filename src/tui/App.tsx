@@ -644,6 +644,9 @@ export function App({
     if (droppedCron > 0) setTimeout(() => pushItem({ kind: 'note', text: `跳过 ${droppedCron} 个其他会话的定时任务` }), 0);
     const staleIds = cron.current.restore(myCronJobs);
     for (const id of staleIds) void cronStore.current.remove(ctx.cwd, id);
+    const restoredCron = myCronJobs.length - staleIds.length;
+    // pushItem 在本块之后才声明（useCallback，708 行），延后一帧推送，避开 TDZ。
+    if (restoredCron > 0) setTimeout(() => pushItem({ kind: 'note', text: `恢复 ${restoredCron} 个本会话定时任务` }), 0);
   }
 
   const persist = useCallback(() => {
