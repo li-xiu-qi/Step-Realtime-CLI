@@ -45,7 +45,7 @@ That installs a pre-built package: nothing is compiled locally and no dependenci
 
 See [Quick start](./docs/en/quickstart.md) for installation and configuration details, and [Installation](./docs/en/installation.md) for the trade-offs between the four installation methods.
 
-If you already have another AI agent at hand (Claude Code, Kimi, and so on), [`skills/step-code-install/`](./skills/step-code-install/SKILL.md) is an install-instructions skill: clone the repo, point your agent at it, and it will know how to build, where to put the API key, and what to check when the build fails.
+If you already have another AI agent at hand, [`skills/step-code-install/`](./skills/step-code-install/SKILL.md) is an install-instructions skill: clone the repo, point your agent at it, and it will know how to build, where to put the API key, and what to check when the build fails.
 
 ## Documentation
 

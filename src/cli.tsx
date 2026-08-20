@@ -355,7 +355,7 @@ try {
   provider = createProvider(config);
 } catch (e) {
   const msg = (e as Error).message;
-  // 交互模式 + 缺 API key：不直接退出，给一次现场配置的机会（对齐主流 CLI 的引导体验）
+  // 交互模式 + 缺 API key：不直接退出，给一次现场配置的机会
   if (opts.print === undefined && opts.reflect !== true && msg.includes('缺少 API key')) {
     const configured = await runFirstRunSetup();
     if (configured.kind === 'configured') {
