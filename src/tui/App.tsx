@@ -3064,7 +3064,10 @@ export function App({
       // 静默注入（cron 触发等合成消息）不在转录区显示 user 条目——cron 场景由触发卡片承载展示
       if (!opts?.silent) setItems((prev) => [...prev, { kind: 'user', text: `${extracted.displayText}${imgNote}` }]);
       // 后台通知走预装配本体（background_task origin + 幂等 id 随行），其余消息现场打包
-      history.current.push(opts?.prepared ?? stored({ role: 'user', content: extracted.content }, { kind: 'user' }));
+      const userMsg = opts?.prepared ?? stored({ role: 'user', content: extracted.content }, { kind: 'user' });
+      history.current.push(userMsg);
+      // 用户输入立即持久化：防进程在模型响应期间闪退（OOM/未捕获异常）时输入丢失
+      appendWireEvent({ type: 'context.append_message', ts: userMsg.ts, message: userMsg });
       imageStore.current.clear();
       pasteStore.current.clear();
       // 新 append 的这条还没经历 API 往返：立刻把它计入未测量尾部估算，
