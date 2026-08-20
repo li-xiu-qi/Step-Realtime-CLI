@@ -3509,8 +3509,9 @@ export function App({
   // 输入区/弹层行数：弹层替换输入区时按各组件实测结构估算；常态用 computePromptRows 按输入内容
   // 实测——斜杠菜单、长输入折行都计入，不再是恒定 4 行（busy 期间敲 / 必超屏的洞即出于此）。
   let promptRows: number;
-  // 弹层内宽（边框 2 + paddingX 2）；列数未知时按结构估算（每逻辑行 1 行）
-  const overlayInner = stdout?.columns === undefined ? undefined : stdout.columns - 4;
+  // 弹层内宽（边框 2 + paddingX 2）；列数未知时按结构估算（每逻辑行 1 行）。
+  // Math.max(1, ...) 防极端窄终端（columns<5）时内宽 ≤0，后续 ceil(行宽/内宽) 会除零得 Infinity。
+  const overlayInner = stdout?.columns === undefined ? undefined : Math.max(1, stdout.columns - 4);
   // 会话选择器可见条数：按终端行数解出。固定条数在小终端上会把帧总高顶过「行数 − 1」红线，
   // 那时 Ink 放弃原地重绘改全量清屏，每次移动高亮都整屏抖动并清掉 scrollback。
   // 预留 = 状态栏 + 动态区最小 1 行（弹层期间对话区可压到最小，但不能压成 0）。
