@@ -21,8 +21,12 @@ const CONSECUTIVE_TAIL_HITS = 2;
 const SHORT_PERIOD_MIN_REPEATS = 8;
 /** 短周期的最大周期长度：超过即交给长重复路径。 */
 const SHORT_PERIOD_MAX = 12;
-/** 触发检测的最小流长度：思考太短不可能成循环，避免开头误判。 */
-const MIN_CHARS = 400;
+/** 触发检测的最小流长度：思考太短不可能成循环，避免开头误判。
+ *  取 100：557 字符的 "elevation" 单字重复死循环（实测案例，调试包
+ *  20260819054540）在更高 MIN_CHARS 下根本没进入检测逻辑。降到 100 后
+ *  短周期路径（p ∈ [1,12]，≥8 次）在 p=10 时末尾 80 字符全为复读单元，
+ *  能正确命中。100 字符是正常推理的最小展开长度，不会误报。 */
+const MIN_CHARS = 100;
 
 export interface ThinkingLoopVerdict {
   /** 是否判定为死循环。 */
