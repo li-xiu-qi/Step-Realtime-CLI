@@ -5,11 +5,20 @@
  */
 import type { Component } from '@earendil-works/pi-tui';
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { basename } from 'node:path';
 import type { DisplayItem, WelcomeData } from '../chat/types.js';
+import { offloadIfNeeded as offloadLargeResult, readCachedOutput } from '../agent/outputCache.js';
 
 /** Braille 转圈帧序列，供 running 状态动态 spinner。 */
 const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;
+
+/** 字节大小格式化。 */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /** 当前 braille 帧：由时间派生，不存计数器。 */
 function spinnerFrame(): string {
@@ -21,6 +30,14 @@ import { markdownTransform } from '../chat/markdownPrep.js';
 import { formatDuration } from '../chat/duration.js';
 import { formatCount } from './StatusLine.js';
 import { t } from '../i18n.js';
+import {
+  ERROR_PREVIEW_LINES,
+  DIFF_MAX_LINES,
+  MAX_INLINE_CHARS,
+  getToolRenderer,
+  summarizeResult,
+  outputStats,
+} from './resultRenderers.js';
 
 // 顶部 logo：FIGlet "Small" 风格的 S（紧凑双线）。
 const LOGO_LINES = [' ___ ', '/ __|', '\\__ \\', '|___/'];
@@ -55,11 +72,6 @@ export function renderWelcome(data: WelcomeData, width: number): string[] {
   const bottom = c.dim(`╰${'─'.repeat(frameWidth + 2)}╯`);
   return [top, ...body, bottom, ''];
 }
-
-/** 错误输出预览行数。 */
-const ERROR_PREVIEW_LINES = 4;
-/** diff 结果完整展示的行数上限，超出截断。 */
-const DIFF_MAX_LINES = 200;
 
 /**
  * 能被 Ctrl+B 转后台的工具：它们跑起来会在 BackgroundManager 里留前台任务，
@@ -351,10 +363,43 @@ export class ItemBlock implements Component {
       }
     }
 
-    if (it.result !== undefined && it.result !== '') {
-      const lines = it.result.split('\n');
+    if (it.result !== undefined && it.result !== '' || it.resultFile !== undefined) {
+      // 结果已 offload 到文件：不再有 result 字段，只显示文件路径
+      if (it.resultFile !== undefined && it.result === undefined) {
+        const fname = basename(it.resultFile);
+        out.push(c.dim(`    ↳ 输出已保存至 ${fname}（Ctrl+O 查看）`));
+        out.push('');
+        return out;
+      }
+      // 超大结果提前 offload（仅在 result 字段存在时检查）
+      if (it.result !== undefined && it.result.length > MAX_INLINE_CHARS) {
+        const cached = offloadLargeResult(it.name, it.result);
+        if (cached !== undefined) {
+          const fname = basename(cached);
+          out.push(c.dim(`    ↳ 输出 ${formatBytes(it.result.length)} → ${fname}（Ctrl+O 查看）`));
+          out.push('');
+          return out;
+        }
+      }
+
+      const resultText = it.result ?? '';
+      if (resultText === '') { out.push(''); return out; }
+
+      const renderer = getToolRenderer(it.name);
+      const lines = resultText.split('\n');
+
+      // 摘要型工具：body 为空，只显示统计芯片
+      if (renderer.bodyMode === 'summary') {
+        const stats = outputStats(resultText);
+        out.push(c.dim(`    ↳ ${stats.lines} 行 / ${formatBytes(stats.chars)}`));
+        if (stats.lines > 0) {
+          out.push(c.dim(`    ↳ ${summarizeResult(it.name, resultText)}`));
+        }
+        out.push('');
+        return out;
+      }
+
       if (it.status === 'error') {
-        // 错误：预览前若干行，其余折叠
         for (const l of lines.slice(0, ERROR_PREVIEW_LINES)) {
           out.push(...indent(wrap(c.error(l), width - 4), '    '));
         }
@@ -362,9 +407,6 @@ export class ItemBlock implements Component {
           out.push(c.dim(`    ↳ 还有 ${lines.length - ERROR_PREVIEW_LINES} 行（Ctrl+O 查看）`));
         }
       } else if (looksLikeDiff(lines)) {
-        // diff：完整展示（截到上限），这是用户最需要当场看清的内容。
-        // 统计增删行：同时支持 unified diff（+/ -前缀）和 edit_file formatRow（行号 + 标记），
-        // 并排除 edit_file 的 +N -M path 摘要头（它的 + 前缀会被误算成 +1 行）。
         let added = 0, removed = 0;
         for (const l of lines) {
           const row = DIFF_ROW_RE.exec(l);
@@ -374,18 +416,18 @@ export class ItemBlock implements Component {
             else if (l.startsWith('-') && !l.startsWith('---')) removed++;
           }
         }
-        let summary = '';
-        if (added > 0) summary += c.ok(`+${added} `);
-        if (removed > 0) summary += c.error(`-${removed} `);
-        if (summary !== '') out.push(`    ${summary.trimEnd()}`);
+        if (added > 0 || removed > 0) {
+          out.push(c.dim(`    ↳ ${added > 0 ? c.ok(`+${added} `) : ''}${removed > 0 ? c.error(`-${removed}`) : ''}`));
+        }
         for (const l of lines.slice(0, DIFF_MAX_LINES)) {
           out.push(...indent(wrap(colorDiffLine(l), width - 4), '    '));
         }
-        if (lines.length > DIFF_MAX_LINES) out.push(c.dim(`    ↳ 还有 ${lines.length - DIFF_MAX_LINES} 行`));
+        if (lines.length > DIFF_MAX_LINES) {
+          out.push(c.dim(`    ↳ 还有 ${lines.length - DIFF_MAX_LINES} 行（Ctrl+O 查看）`));
+        }
       } else {
-        // 成功的普通输出：整段折叠成一行提示
-        const chars = it.result.length;
-        out.push(c.dim(`    ↳ ${lines.length} 行 / ${chars} 字符（Ctrl+O 查看）`));
+        const stats = outputStats(resultText);
+        out.push(c.dim(`    ↳ ${stats.lines} 行 / ${formatBytes(stats.chars)}（Ctrl+O 查看）`));
       }
     }
     out.push('');
@@ -434,8 +476,15 @@ function renderToolExpanded(it: Extract<DisplayItem, { kind: 'tool' }>, width: n
       : '';
   const head = `${mark} ${c.toolName(it.name)}${toolArgText(it)}${subagent}`;
   const out = visibleWidth(head) > width ? wrap(head, width) : [head];
-  if (it.result !== undefined && it.result !== '') {
-    const lines = it.result.split('\n');
+
+  // 结果在文件里（offload）：从文件读取
+  const cachedResult = it.resultFile !== undefined && it.result === undefined
+    ? readCachedOutput(it.resultFile)
+    : undefined;
+  const resultText = cachedResult ?? it.result ?? '';
+
+  if (resultText !== '') {
+    const lines = resultText.split('\n');
     if (it.status === 'error') {
       for (const l of lines) out.push(...indent(wrap(c.error(l), width - 4), '    '));
     } else if (looksLikeDiff(lines)) {

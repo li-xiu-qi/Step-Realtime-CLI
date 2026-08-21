@@ -27,6 +27,7 @@ import type { AgentDefinition } from '../agent/subagent/types.js';
 import { BackgroundManager, type BackgroundTask } from '../agent/background/manager.js';
 import { CronScheduler } from '../agent/cron/scheduler.js';
 import { CronJobStore } from '../agent/cron/store.js';
+import { offloadIfNeeded } from '../agent/outputCache.js';
 import { assembleGoalInject, decideGoalTurn } from '../agent/goal/drive.js';
 import { GoalMode, type GoalChangeEvent } from '../agent/goal/mode.js';
 import { initTeam } from '../agent/team/mode.js';
@@ -432,6 +433,9 @@ export class PiChat {
     this.editor.onOtherKey = () => {
       this.cancelBacktrackPrimed();
       this.cancelExitPrimed();
+      // 输入优先：每收到一个按键立即刷新输入框，不等 16ms throttle。
+      // 解决 doRender 长任务阻塞时输入冻结的问题。
+      try { (this.tui as any).requestImmediateRender?.(); } catch { /* 兼容旧版 pi-tui */ }
     };
     // 提示符着色跟随 busy。
     // 绑一个读 this.busy 的函数，而不是在 6 处 setBusy 调用点各改一次——那种写法
@@ -1349,11 +1353,17 @@ ${task.output === '' ? '（暂无输出）' : task.output}`,
     }
     this.transcript.updateLastWhere(
       (it) => it.kind === 'tool' && it.id === `bang-${this.bangCounter}`,
-      (it) => ({
-        ...(it as Extract<DisplayItem, { kind: 'tool' }>),
-        status: result.isError ? ('error' as const) : ('ok' as const),
-        result: result.content,
-      }),
+      (it) => {
+        const toolItem = it as Extract<DisplayItem, { kind: 'tool' }>;
+        const cachedPath = offloadIfNeeded('bash', result.content);
+        return {
+          ...toolItem,
+          status: result.isError ? ('error' as const) : ('ok' as const),
+          result: cachedPath !== undefined ? undefined : result.content,
+          resultFile: cachedPath,
+          resultSize: result.content.length,
+        };
+      },
     );
     this.history.push(
       stored(
@@ -3459,7 +3469,18 @@ ${task.output === '' ? '（暂无输出）' : task.output}`,
         this.activity.noteToolActivity();
         this.transcript.updateLastWhere(
           (it) => it.kind === 'tool' && it.id === ev.id,
-          (it) => ({ ...(it as Extract<DisplayItem, { kind: 'tool' }>), status: ev.isError ? 'error' : 'ok', result: ev.result }),
+          (it) => {
+            const toolItem = it as Extract<DisplayItem, { kind: 'tool' }>;
+            const result = ev.result ?? '';
+            const cachedPath = offloadIfNeeded(toolItem.name, result);
+            return {
+              ...toolItem,
+              status: ev.isError ? 'error' : 'ok',
+              result: cachedPath !== undefined ? undefined : result,
+              resultFile: cachedPath,
+              resultSize: result.length,
+            };
+          },
         );
         // todo_list 工具改的是 this.todos，面板要跟着刷；其它工具走这一路开销是两次赋值
         this.chrome.setTodos(this.todos.items);
