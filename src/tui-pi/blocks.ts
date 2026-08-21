@@ -34,8 +34,10 @@ import {
   ERROR_PREVIEW_LINES,
   DIFF_MAX_LINES,
   MAX_INLINE_CHARS,
+  RESULT_PREVIEW_LINES,
   getToolRenderer,
   summarizeResult,
+  summarizeToolInput,
   outputStats,
 } from './resultRenderers.js';
 
@@ -399,6 +401,21 @@ export class ItemBlock implements Component {
         return out;
       }
 
+      // 命令型工具：显示执行了什么命令 + 输出统计，不展示输出体
+      if (renderer.bodyMode === 'shell') {
+        const cmdPreview = summarizeToolInput(it.name, it.input);
+        if (cmdPreview !== '') {
+          out.push(c.dim(`    $ ${cmdPreview}`));
+        }
+        const stats = outputStats(resultText);
+        out.push(c.dim(`    ↳ ${stats.lines} 行 / ${formatBytes(stats.chars)}`));
+        if (stats.lines > 0) {
+          out.push(c.dim(`    ↳ ${summarizeResult(it.name, resultText)}`));
+        }
+        out.push('');
+        return out;
+      }
+
       if (it.status === 'error') {
         for (const l of lines.slice(0, ERROR_PREVIEW_LINES)) {
           out.push(...indent(wrap(c.error(l), width - 4), '    '));
@@ -426,8 +443,24 @@ export class ItemBlock implements Component {
           out.push(c.dim(`    ↳ 还有 ${lines.length - DIFF_MAX_LINES} 行（Ctrl+O 查看）`));
         }
       } else {
-        const stats = outputStats(resultText);
-        out.push(c.dim(`    ↳ ${stats.lines} 行 / ${formatBytes(stats.chars)}（Ctrl+O 查看）`));
+        // 截断模式：按 previewLines 展示首部或尾部，其余折叠
+        const previewLines = renderer.previewLines ?? RESULT_PREVIEW_LINES;
+        const useTail = renderer.tail ?? false;
+        if (useTail && lines.length > previewLines) {
+          const hidden = lines.length - previewLines;
+          out.push(c.dim(`    ↳ …(${hidden} earlier lines)`));
+          for (const l of lines.slice(-previewLines)) {
+            out.push(...indent(wrap(l, width - 4), '    '));
+          }
+        } else {
+          for (const l of lines.slice(0, previewLines)) {
+            out.push(...indent(wrap(l, width - 4), '    '));
+          }
+          if (lines.length > previewLines) {
+            const remaining = lines.length - previewLines;
+            out.push(c.dim(`    ↳ 还有 ${remaining} 行（Ctrl+O 查看）`));
+          }
+        }
       }
     }
     out.push('');

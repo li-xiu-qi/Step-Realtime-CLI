@@ -1,9 +1,7 @@
 /**
- * 大输出文件缓存 — 超过 MAX_INLINE_CHARS 的结果写文件 offload。
+ * 大输出文件缓存 — 超过阈值的结果写入磁盘文件，渲染时只展示文件路径。
  *
- * 设计来源：Kimi Code 的 task-output-viewer，但更轻量：
- *   - 不需要完整 pager，ExpandOverlay 逐行读取
- *   - 超出 VIEW 阈值自动清理
+ * offload 避免大结果长期驻留进程堆，配合 ExpandOverlay 按需读取。
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';

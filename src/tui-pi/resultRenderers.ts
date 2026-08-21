@@ -1,16 +1,13 @@
 /**
- * ResultRenderer 注册表 — 按工具名匹配渲染策略。
+ * 工具结果渲染策略注册表 — 按工具名匹配渲染策略。
  *
- * 设计来源：Kimi Code 的 @/tui/components/messages/tool-renderers/。
- * 每条工具结果在进入渲染管线前先查表，决定：
- *   - collapsed 状态展示几行
- *   - 超过阈值是否 offload 到文件
- *   - 是否用摘要（chip 只显示统计，body 为空）
+ * 在内容进入渲染管线前做分类处理：大体积结果提前降级为摘要或 offload，
+ * 减少 doRender 的同步工作量。
  */
 
 // ─── 常量 ───────────────────────────────────────────────────────────────────
 
-/** 工具结果预览默认行数（匹配 Kimi Code 的 RESULT_PREVIEW_LINES）。 */
+/** 工具结果预览默认行数（折叠状态下展示的最大行数）。 */
 export const RESULT_PREVIEW_LINES = 3;
 
 /** 错误结果预览行数（比普通多 1 行以便看清错误栈首行）。 */
@@ -29,27 +26,38 @@ export const MAX_RESULT_CHARS = 65536;
 
 /** 渲染策略：body 渲染方式。 */
 export type BodyMode =
-  | 'summary'   // body 为空，芯片只显示统计信息（grep/glob 等）
-  | 'truncated' // 裁剪到 N 行，超出部分折叠提示（默认）
-  | 'full';     // 完整展示（diff、错谋栈）
+  | 'summary'     // body 为空，芯片只显示统计信息（grep/glob/read 等）
+  | 'shell'       // 命令类工具：显示命令摘要 + 输出统计，不展示输出体
+  | 'truncated'   // 裁剪到 N 行，超出部分折叠提示（默认）
+  | 'full';       // 完整展示（diff）
 
 export interface ToolRenderer {
   /** 折叠状态下的 body 渲染模式。 */
   bodyMode: BodyMode;
-  /** 摘要文本（bodyMode = 'summary' 时使用，或 truncated/full 时额外加一行摘要）。 */
+  /** 摘要文本。summary/shell 模式用；truncated/full 模式下也可附加一行摘要。 */
   summary?: string;
+  /** 预览行数（默认 RESULT_PREVIEW_LINES）。shell 模式忽略此值。 */
+  previewLines?: number;
+  /** 尾部模式（而非头部）。保留最新 N 行而非最前 N 行，适合长运行命令的实时输出。 */
+  tail?: boolean;
   /** 是否总是 offload（无视内容大小，适合元数据类工具）。 */
   forceOffload?: boolean;
 }
 
 // ─── 工具分类 ─────────────────────────────────────────────────────────────
 
-/** 匹配集合。 */
-const SUMMARY_TOOLS = new Set([
-  'grep', 'glob', 'web_search', 'web_fetch', 'ls', 'find',
+/** 摘要型工具：body 完全隐藏，只显示统计/采样。 */
+const SUMMARY_TOOLS = new Set<string>([
+  'grep', 'glob', 'web_search', 'read_file', 'read', 'ls', 'find',
 ]);
 
-const ALWAYS_OFFLOAD = new Set([
+/** 命令型工具：显示执行的命令 + 输出统计，不展示输出体。 */
+const SHELL_TOOLS = new Set<string>([
+  'bash', 'run_shell', 'shell', 'exec',
+]);
+
+/** 总是 offload 的工具（输出体积不可控）。 */
+const ALWAYS_OFFLOAD = new Set<string>([
   'web_fetch', // 抓到的网页正文可能非常大
 ]);
 
@@ -58,6 +66,9 @@ const ALWAYS_OFFLOAD = new Set([
 export function getToolRenderer(toolName: string): ToolRenderer {
   if (SUMMARY_TOOLS.has(toolName)) {
     return { bodyMode: 'summary', summary: '' };
+  }
+  if (SHELL_TOOLS.has(toolName)) {
+    return { bodyMode: 'shell' };
   }
   if (ALWAYS_OFFLOAD.has(toolName)) {
     return { bodyMode: 'truncated', forceOffload: true };
@@ -70,6 +81,11 @@ export function isSummaryTool(toolName: string): boolean {
   return SUMMARY_TOOLS.has(toolName);
 }
 
+/** 是否为命令型工具（body 显示命令摘要 + 输出统计）。 */
+export function isShellTool(toolName: string): boolean {
+  return SHELL_TOOLS.has(toolName);
+}
+
 /** 工具结果是否需要强制 offload 到文件。 */
 export function shouldForceOffload(toolName: string): boolean {
   return ALWAYS_OFFLOAD.has(toolName);
@@ -79,8 +95,9 @@ export function shouldForceOffload(toolName: string): boolean {
 
 /**
  * 从工具结果中提取摘要行。
- * 默认返回结果的第 1 行（通常是最关键的信息）。
- * grep/glob 提取前 N 个命中路径。
+ * grep/glob：提取前 N 个命中路径
+ * shell：提取首行（通常是命令输出首行）
+ * 其他：取首行超长截断
  */
 export function summarizeResult(toolName: string, result: string): string {
   if (result.length === 0) return '（空结果）';
@@ -97,6 +114,13 @@ export function summarizeResult(toolName: string, result: string): string {
     return samples.join(', ');
   }
 
+  // shell 类：取首行作为输出摘要
+  if (SHELL_TOOLS.has(toolName)) {
+    const trimmed = firstLine.trim();
+    if (trimmed.length > 80) return trimmed.slice(0, 77) + '…';
+    return trimmed;
+  }
+
   // 其他工具：取首行，超长截断
   const trimmed = firstLine.trim();
   if (trimmed.length > 80) return trimmed.slice(0, 77) + '…';
@@ -110,4 +134,42 @@ export function summarizeResult(toolName: string, result: string): string {
 export function outputStats(result: string): { lines: number; chars: number } {
   const lines = result.split('\n');
   return { lines: lines.length, chars: result.length };
+}
+
+// ─── 命令参数摘要 ────────────────────────────────────────────────────────
+
+/**
+ * 从工具输入的参数中提取可读摘要。
+ * bash 提取 command 字段；read_file 提取 path 字段。
+ */
+export function summarizeToolInput(toolName: string, input: unknown): string {
+  if (input === null || input === undefined) return '';
+  if (typeof input !== 'object') return String(input);
+
+  const obj = input as Record<string, unknown>;
+
+  if (SHELL_TOOLS.has(toolName) && typeof obj.command === 'string') {
+    const cmd = obj.command.trim();
+    if (cmd.length > 60) return cmd.slice(0, 57) + '…';
+    return cmd;
+  }
+
+  if (typeof obj.path === 'string') {
+    const p = obj.path.trim();
+    if (p.length > 60) return p.slice(0, 57) + '…';
+    return p;
+  }
+  if (typeof obj.file_path === 'string') {
+    const p = obj.file_path.trim();
+    if (p.length > 60) return p.slice(0, 57) + '…';
+    return p;
+  }
+
+  // 通用：拼出前两个非空值
+  const parts = Object.values(obj)
+    .filter((v) => v !== null && v !== undefined && v !== '')
+    .slice(0, 2)
+    .map((v) => String(v).trim().slice(0, 30));
+  if (parts.length === 0) return '';
+  return parts.join(' ');
 }
