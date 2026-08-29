@@ -45,6 +45,12 @@ export class Transcript implements Component {
   /** 被折叠的块数累计（turn 内裁剪产生）。 */
   private foldedBlocks = 0;
   /**
+   * 并行子 agent 计数（头部显示，非折叠提示）。由消费方按 start/end 事件维护——Transcript
+   * 自己不扫描块（那是 O(N)/帧，且与 prefixCache 的冻结前提冲突）。
+   * 只记运行中数：终态数从卡片上看得见，头部要回答的是「还有几个在跑」。
+   */
+  private runningSubagents = 0;
+  /**
    * 结构版本号：块数组发生结构性变化（push/reset/折叠/裁剪）时自增；尾块的内容变更不递增。
    * 与 prefixCache 配套——render 时据此判断「非尾块的冻结前缀是否仍有效」。尾块是流式追加与
    * 工具状态回填的唯一热变更目标，它的变化不该让前缀缓存每帧失效，否则冻结形同虚设。
@@ -117,6 +123,26 @@ export class Transcript implements Component {
     }
   }
 
+  /**
+   * 按卡片 id 原地更新（子 agent 进度归属用）。返回是否命中。
+   *
+   * 与 {@link updateLastWhere} 的区别：那个找「最后一个运行中的 spawn_agent」作近似，并行时
+   * 多个子 agent 的进度全堆到同一张卡片（token/耗时/工具数互相覆盖）。这里按 tool_use id
+   * 精确定位——runner 的 onEvent key 与 tool_start 的 id 已统一到 tu.id，同源才可归属。
+   */
+  updateById(id: string, next: (item: DisplayItem) => DisplayItem): boolean {
+    for (let i = this.blocks.length - 1; i >= 0; i--) {
+      const b = this.blocks[i]!;
+      const it = b.getItem();
+      if (it.kind === 'tool' && it.id === id) {
+        b.setItem(next(it));
+        if (i !== this.blocks.length - 1) this.structVer++;
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** 找到最后一个满足条件的块并更新（工具状态回填用）。返回是否命中。 */
   updateLastWhere(pred: (item: DisplayItem) => boolean, next: (item: DisplayItem) => DisplayItem): boolean {
     for (let i = this.blocks.length - 1; i >= 0; i--) {
@@ -133,6 +159,45 @@ export class Transcript implements Component {
   /** 末块（流式追加正文时判断能否续接）。 */
   lastItem(): DisplayItem | undefined {
     return this.blocks[this.blocks.length - 1]?.getItem();
+  }
+
+  /**
+   * 设置并行子 agent 的运行中计数（头部显示用）。消费方按 start/end 事件驱动：
+   * start +1、end -1，下限钳到 0（防止事件乱序或重复 end 把计数压成负数）。
+   * 不递增 structVer——计数是每帧热变更，递增会让前缀缓存每帧失效，冻结即失效。
+   */
+  setRunningSubagents(n: number): void {
+    const next = Math.max(0, n);
+    if (next === this.runningSubagents) return;
+    this.runningSubagents = next;
+  }
+
+  /** 当前运行中的子 agent 数（测试与消费方自查用）。 */
+  runningSubagentCount(): number {
+    return this.runningSubagents;
+  }
+
+  /**
+   * 把并行数广播给所有 spawn_agent 卡片（卡片据此决定是否折成一行）。
+   *
+   * 与 {@link setRunningSubagents} 的分工：后者只管头部那行计数，本方法管卡片形态。
+   * 二者由 PiChat 在同一个事件点一起调，但职责分开——头部计数是全局提示，
+   * 卡片折叠是逐卡片形态决策，将来可能想只开其中一个。
+   *
+   * 递增 structVer：这是结构性变化（卡片从 5 行变 1 行），前缀必须重算，
+   * 与 setRunningSubagents 的「不递增」正相反。两者常被一起调用，别合并。
+   */
+  setSubagentParallel(n: number): void {
+    const next = Math.max(0, n);
+    if (next === this.runningSubagents) return;
+    this.runningSubagents = next;
+    for (let i = 0; i < this.blocks.length; i++) {
+      const it = this.blocks[i]!.getItem();
+      if (it.kind === 'tool' && it.name === 'spawn_agent') {
+        this.blocks[i]!.setItem({ ...it, subagentParallel: next } as DisplayItem);
+      }
+    }
+    this.structVer++;
   }
 
   /**
@@ -243,6 +308,18 @@ export class Transcript implements Component {
     }
     if (this.foldedBlocks > 0) {
       head.push(truncateToWidth(c.dim(`· 本轮 ${this.foldedBlocks} 个条目已折叠`), width));
+    }
+    // 并行子 agent 头部计数：≥2 才显示。单个时不显示——一张卡片自己会说，多一行是噪音。
+    // 与 foldedTurns/foldedBlocks 同属 head，但它们触发的是结构变化（structVer++），
+    // 计数是每帧热变更，故独立于前缀缓存、每帧重算（成本 1 行，与现有 head 同档）。
+    if (this.runningSubagents >= 2) {
+      head.push(
+        truncateToWidth(
+          c.dim(`· 并行运行 ${this.runningSubagents} 个子 agent`),
+          width,
+        ),
+        '',
+      );
     }
 
     const lastIdx = this.blocks.length - 1;

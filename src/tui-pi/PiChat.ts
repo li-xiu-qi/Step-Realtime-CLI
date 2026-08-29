@@ -20,6 +20,7 @@ import { notifyDedupKeyFromOrigin, pendingDeliveredEvents } from '../agent/wirel
 
 import { buildSettleMessage, decideNotifyRoute } from '../agent/background/notify.js';
 import { startHeapWatch } from './heapWatch.js';
+import { logDebug } from '../utils/logger.js';
 import { emitTerminalNotification } from '../agent/background/terminal-notify.js';
 import { decide, planModeDenyReason, type PermissionMode } from '../agent/permission/mode.js';
 import { createSubagentRunner } from '../agent/subagent/runner.js';
@@ -327,6 +328,13 @@ export class PiChat {
    * turn 结束后置 undefined。/handoff 只在非 busy 时可用，busy 时提示等待。
    */
   private currentRunSubagent: RunSubagentFn | undefined;
+  /**
+   * 本回合运行中的子 agent id 集合（头部计数数据源）。
+   *
+   * 用 Set 而非裸计数：同一 id 的 end 可能因补发路径重复到达，Set.delete 返回 false
+   * 时不动计数，避免扣成负数。回合 finally 无条件清空——中断时 end 事件可能不全。
+   */
+  private runningSubagentIds = new Set<string>();
   /**
    * handoff 返回栈：每次 /handoff 到新的子会话前，把「当前所在」压栈。
    * /handoff back 弹栈并 resume 那个会话。
@@ -993,20 +1001,64 @@ ${task.output === '' ? '（暂无输出）' : task.output}`,
   }
 
   /**
-   * 把子 agent 进度写进最近一条运行中的 spawn_agent 条目。
+   * 把子 agent 进度写进属于它的那张 spawn_agent 卡片。
    *
-   * 只找「运行中」的那条：同一轮可能并行派多个子 agent，但 runner 的 onEvent 不带
-   * 工具调用 id（只有 session id），无法精确路由。取最近一条运行中的条目作近似——并行时
-   * 进度会挤在最后一条上（如实记在设计档案的差异清单里）。
+   * 按 ev.id（= tool_use id，runner 在 runTurn 的工具边界由 tu.id 注入）精确归属。
+   * 旧实现用 updateLastWhere 找「最后一个运行中的 spawn_agent」作近似：并行时所有
+   * 子 agent 的 token/耗时/工具数互相覆盖，只剩一张卡片在动，其余看起来像卡死。
+   * 未命中不静默丢弃——落到 updateLastWhere 兜底一次并记日志，避免 id 链路断了又退化成
+   * 「进度凭空消失」（两者症状不同，别用一个掩盖另一个）。
+   */
+  /**
+   * 并行状态广播：头部计数 + 逐卡片并行数，一次推给 Transcript。
+   *
+   * 两个方法职责不同（前者管头部提示行且不递增 structVer，后者管卡片形态且必须递增），
+   * 但触发点完全相同——都是「运行中集合变了」。合成一个方法调用，避免将来只改一处
+   * 导致头部与卡片形态不一致（那种不一致极难自查：头部说 3 个，卡片还全展开着）。
+   */
+  private broadcastSubagentParallel(): void {
+    const n = this.runningSubagentIds.size;
+    this.transcript.setRunningSubagents(n);
+    this.transcript.setSubagentParallel(n);
+  }
+
+  /**
+   * 把子 agent 进度写进属于它的那张 spawn_agent 卡片。
+   *
+   * 按 ev.id（= tool_use id，runner 在 runTurn 的工具边界由 tu.id 注入）精确归属。
+   * 旧实现用 updateLastWhere 找「最后一个运行中的 spawn_agent」作近似：并行时所有
+   * 子 agent 的 token/耗时/工具数互相覆盖，只剩一张卡片在动，其余看起来像卡死。
+   * 未命中不静默丢弃——落到 updateLastWhere 兜底一次并记日志，避免 id 链路断了又退化成
+   * 「进度凭空消失」（两者症状不同，别用一个掩盖另一个）。
    */
   private applySubagentProgress(ev: SubagentProgressEvent): void {
+    // 运行中 id 集合：头部计数用 Set 而非裸 ++/--——同一 id 的 end 只应减一次
+    // （abort 与正常 return 都会走补发点，runner 的 endSent 幂等挡住 runner 侧重复，
+    // 但外部 CLI 分支的兜底路径与事件乱序仍可能让消费方收到重复 end）。
+    if (ev.kind === 'start') {
+      this.runningSubagentIds.add(ev.id);
+      this.broadcastSubagentParallel();
+    } else if (ev.kind === 'end' || ev.kind === 'error') {
+      if (this.runningSubagentIds.delete(ev.id)) {
+        this.broadcastSubagentParallel();
+      }
+    }
     const patch = (
       apply: (it: Extract<DisplayItem, { kind: 'tool' }>) => Extract<DisplayItem, { kind: 'tool' }>,
     ): void => {
-      this.transcript.updateLastWhere(
-        (it) => it.kind === 'tool' && it.name === 'spawn_agent' && it.status === 'running',
+      const hit = this.transcript.updateById(
+        ev.id,
         (it) => apply(it as Extract<DisplayItem, { kind: 'tool' }>),
       );
+      if (!hit) {
+        // id 未命中：卡片可能已被折叠成摘要或尚在 forming。兜底到最后一个 running 卡片，
+        // 宁可将就归属也不要吞掉进度。记一条 debug，便于区分「归属错了」与「根本没进度」。
+        logDebug(`子 agent 进度未按 id 命中卡片（id=${ev.id}），已退化为就近归属`);
+        this.transcript.updateLastWhere(
+          (it) => it.kind === 'tool' && it.name === 'spawn_agent' && it.status === 'running',
+          (it) => apply(it as Extract<DisplayItem, { kind: 'tool' }>),
+        );
+      }
       this.tui.requestRender();
     };
     if (ev.kind === 'start') {
@@ -1747,6 +1799,10 @@ ${task.output === '' ? '（暂无输出）' : task.output}`,
       case 'clear':
         // 清屏但保留会话历史：转录区清空 + 强制整屏重绘（这是唯一主动接受全量重绘的地方）
         this.transcript.reset([]);
+        // 头部计数一并归零：卡片已从屏幕消失，残留「并行运行 N 个」会指向不存在的东西。
+        // 回合若仍在跑，后续 start/end 事件会把计数重新填回来，不会丢。
+        this.runningSubagentIds.clear();
+        this.broadcastSubagentParallel();
         this.tui.invalidate();
         this.tui.renderNow(true);
         return;
@@ -4214,6 +4270,13 @@ ${task.output === '' ? '（暂无输出）' : task.output}`,
     } finally {
       this.streamBuffer.drain();
       this.currentRunSubagent = undefined;
+      // 头部计数收尾：无论正常结束、中断还是异常，运行中集合必须清空。
+      // 否则下次 /new 或 resume 会继承上一轮的数字——用户看到「并行运行 3 个子 agent」
+      // 而实际一个都没在跑。中断时 end 事件可能没发全，靠此处兜底而非靠计数自减。
+      if (this.runningSubagentIds.size > 0) {
+        this.runningSubagentIds.clear();
+        this.broadcastSubagentParallel();
+      }
       // 收尾兜底：残留的思考必须在本回合内落块。
       //
       // drain() 只是把 StreamBuffer 的缓冲吐给 applyEvent，而 thinking_delta 在 applyEvent
